@@ -130,6 +130,9 @@ export function Sidebar() {
         <Link href="/library?view=recent" className={navCls(activeView === "recent")}>
           🕘 最近閱讀
         </Link>
+        <Link href="/settings" className={navCls(pathname === "/settings")}>
+          💾 匯出與備份
+        </Link>
       </nav>
 
       <div className="mt-4 flex items-center justify-between px-4 pb-1">
