@@ -1,7 +1,16 @@
 "use client";
 
-import { memo, useEffect, useRef } from "react";
+import { memo, useEffect, useRef, useState } from "react";
+import type { NormRect } from "@/lib/types";
 import { loadPdfJs, type PDFDocumentProxy } from "./pdfjs";
+
+/** An annotation's shapes on one page, ready to draw. */
+export interface PageHighlight {
+  id: string;
+  type: "highlight" | "area" | "note";
+  hex: string;
+  rects: NormRect[];
+}
 
 export interface PageSize {
   width: number;
@@ -20,6 +29,12 @@ export const PageView = memo(function PageView({
   active,
   query,
   currentHit,
+  highlights,
+  selectedId,
+  flash,
+  areaMode,
+  onArea,
+  onPick,
 }: {
   pdf: PDFDocumentProxy;
   pageNumber: number;
@@ -29,6 +44,13 @@ export const PageView = memo(function PageView({
   query: string;
   /** Index of the search hit on this page to emphasise, or -1. */
   currentHit: number;
+  highlights: PageHighlight[];
+  selectedId: string | null;
+  /** Annotation to blink; `n` changes on every request so the same one can blink again. */
+  flash: { id: string; n: number } | null;
+  areaMode: boolean;
+  onArea: (page: number, rect: NormRect, image: string) => void;
+  onPick: (id: string | null) => void;
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const textRef = useRef<HTMLDivElement>(null);
@@ -115,10 +137,53 @@ export const PageView = memo(function PageView({
     if (textReady.current) markHits.current();
   }, [query, currentHit]);
 
+  /* Clicking on a highlight selects it (the text layer sits on top, so hit-test by position). */
+  const pick = (e: React.MouseEvent<HTMLDivElement>) => {
+    const sel = window.getSelection();
+    if (sel && !sel.isCollapsed) return;
+    const box = e.currentTarget.getBoundingClientRect();
+    const x = (e.clientX - box.left) / box.width;
+    const y = (e.clientY - box.top) / box.height;
+    const hit = [...highlights]
+      .reverse()
+      .find((h) => h.rects.some((r) => x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h));
+    onPick(hit?.id ?? null);
+  };
+
+  /* Area (box) selection: drag a rectangle, then crop it out of the rendered canvas. */
+  const [drag, setDrag] = useState<{ x0: number; y0: number; x1: number; y1: number } | null>(null);
+  const areaRect = drag && {
+    x: Math.min(drag.x0, drag.x1),
+    y: Math.min(drag.y0, drag.y1),
+    w: Math.abs(drag.x1 - drag.x0),
+    h: Math.abs(drag.y1 - drag.y0),
+  };
+  const finishArea = () => {
+    const canvas = canvasRef.current;
+    setDrag(null);
+    if (!areaRect || !canvas || !canvas.width) return;
+    const W = size.width * scale;
+    const H = size.height * scale;
+    if (areaRect.w < 8 || areaRect.h < 8) return;
+    const sx = canvas.width / W;
+    const crop = document.createElement("canvas");
+    crop.width = Math.round(areaRect.w * sx);
+    crop.height = Math.round(areaRect.h * sx);
+    crop
+      .getContext("2d")!
+      .drawImage(canvas, areaRect.x * sx, areaRect.y * sx, crop.width, crop.height, 0, 0, crop.width, crop.height);
+    onArea(
+      pageNumber,
+      { page: pageNumber, x: areaRect.x / W, y: areaRect.y / H, w: areaRect.w / W, h: areaRect.h / H },
+      crop.toDataURL("image/png"),
+    );
+  };
+
   return (
     <div
       className="pdf-page"
       data-page={pageNumber}
+      onClick={pick}
       style={
         {
           width: size.width * scale,
@@ -130,7 +195,60 @@ export const PageView = memo(function PageView({
       }
     >
       <canvas ref={canvasRef} style={{ width: "100%", height: "100%" }} />
+      <div className="hl-layer">
+        {highlights.map((h) =>
+          h.rects.map((r, i) => (
+            <div
+              key={`${h.id}-${i}${flash?.id === h.id ? `-${flash.n}` : ""}`}
+              data-annotation={h.id}
+              className={`${h.type === "area" ? "hl-area" : "hl-rect"} ${selectedId === h.id ? "hl-selected" : ""} ${
+                flash?.id === h.id ? "hl-flash" : ""
+              }`}
+              style={{
+                left: `${r.x * 100}%`,
+                top: `${r.y * 100}%`,
+                width: `${r.w * 100}%`,
+                height: `${r.h * 100}%`,
+                ...(h.type === "area"
+                  ? { borderColor: h.hex, background: `${h.hex}22` }
+                  : { background: h.hex, opacity: 0.45 }),
+              }}
+            />
+          )),
+        )}
+      </div>
       <div ref={textRef} className="textLayer" />
+      {areaMode && active && (
+        <div
+          className="area-overlay"
+          data-testid={`area-overlay-${pageNumber}`}
+          onPointerDown={(e) => {
+            const b = e.currentTarget.getBoundingClientRect();
+            e.currentTarget.setPointerCapture(e.pointerId);
+            const x = e.clientX - b.left;
+            const y = e.clientY - b.top;
+            setDrag({ x0: x, y0: y, x1: x, y1: y });
+          }}
+          onPointerMove={(e) => {
+            if (!drag) return;
+            const b = e.currentTarget.getBoundingClientRect();
+            setDrag({
+              ...drag,
+              x1: Math.min(Math.max(0, e.clientX - b.left), b.width),
+              y1: Math.min(Math.max(0, e.clientY - b.top), b.height),
+            });
+          }}
+          onPointerUp={finishArea}
+          onClick={(e) => e.stopPropagation()}
+        >
+          {areaRect && (
+            <div
+              className="absolute border-2 border-dashed border-indigo-500 bg-indigo-500/10"
+              style={{ left: areaRect.x, top: areaRect.y, width: areaRect.w, height: areaRect.h }}
+            />
+          )}
+        </div>
+      )}
       {!active && (
         <div className="absolute inset-0 flex items-center justify-center text-sm text-slate-300">{pageNumber}</div>
       )}

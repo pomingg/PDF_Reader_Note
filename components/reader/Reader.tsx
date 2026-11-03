@@ -3,8 +3,20 @@
 import Link from "next/link";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { api, folderPath, libraryHref } from "@/lib/client";
-import type { DocumentItem, Folder, Project } from "@/lib/types";
-import { PageView, type PageSize } from "./PageView";
+import {
+  DEFAULT_COLORS,
+  type Annotation,
+  type ColorDef,
+  type DocumentItem,
+  type Folder,
+  type NewAnnotation,
+  type NormRect,
+  type Project,
+} from "@/lib/types";
+import { colorHex, NotesPanel } from "./NotesPanel";
+import { PageView, type PageHighlight, type PageSize } from "./PageView";
+import { readSelection, type TextSelection } from "./selection";
+import { SelectionToolbar } from "./SelectionToolbar";
 import { openPdf, type PDFDocumentProxy } from "./pdfjs";
 import { findHits, getAllPageText, OutlinePanel, SearchPanel, ThumbnailPanel, type SearchHit } from "./SidePanels";
 
@@ -14,6 +26,23 @@ const MIN_SCALE = 0.25;
 const MAX_SCALE = 5;
 type Tab = "outline" | "thumbs" | "search";
 type ZoomMode = "fit" | "manual";
+const NO_HIGHLIGHTS: PageHighlight[] = [];
+
+/** Document notes first, then by page and position on the page. */
+function sortAnnotations(list: Annotation[]) {
+  const key = (a: Annotation) => [a.page ?? 0, a.rects[0]?.y ?? -1, a.rects[0]?.x ?? 0, a.createdAt];
+  return [...list].sort((a, b) => {
+    const ka = key(a);
+    const kb = key(b);
+    for (let i = 0; i < ka.length; i++) if (ka[i] !== kb[i]) return ka[i] - kb[i];
+    return 0;
+  });
+}
+
+const isTyping = (e: KeyboardEvent) => {
+  const t = e.target as HTMLElement | null;
+  return !!t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.tagName === "SELECT" || t.isContentEditable);
+};
 
 export function Reader({ docId }: { docId: string }) {
   const [doc, setDoc] = useState<DocumentItem | null>(null);
@@ -36,6 +65,16 @@ export function Reader({ docId }: { docId: string }) {
   const [searching, setSearching] = useState(false);
   const [hitIndex, setHitIndex] = useState(-1);
 
+  const [annotations, setAnnotations] = useState<Annotation[]>([]);
+  const [colors, setColors] = useState<ColorDef[]>(DEFAULT_COLORS);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [focusId, setFocusId] = useState<string | null>(null);
+  const [flash, setFlash] = useState<{ id: string; n: number } | null>(null);
+  const [areaMode, setAreaMode] = useState(false);
+  const [notesOpen, setNotesOpen] = useState(true);
+  const [textSel, setTextSel] = useState<TextSelection | null>(null);
+  const [noteError, setNoteError] = useState("");
+
   const scroller = useRef<HTMLDivElement>(null);
   const searchInput = useRef<HTMLInputElement>(null);
   const restored = useRef(false);
@@ -52,6 +91,8 @@ export function Reader({ docId }: { docId: string }) {
         setDoc(d);
         api.projects().then((ps) => setProject(ps.find((p) => p.id === d.projectId) ?? null));
         api.folders(d.projectId).then(setFolders);
+        api.annotations(docId).then((a) => !cancelled && setAnnotations(sortAnnotations(a)));
+        api.colors().then((c) => !cancelled && setColors(c));
 
         const opened = await openPdf(`/api/documents/${docId}/file`);
         destroy = opened.destroy;
@@ -225,6 +266,117 @@ export function Reader({ docId }: { docId: string }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentHit]);
 
+  /* ------------------------------------------------------------------ notes */
+
+  const pageHighlights = useMemo(() => {
+    const map = new Map<number, PageHighlight[]>();
+    for (const a of annotations) {
+      if (a.type === "note") continue;
+      const hex = colorHex(colors, a.color);
+      const byPage = new Map<number, NormRect[]>();
+      for (const r of a.rects) byPage.set(r.page, [...(byPage.get(r.page) ?? []), r]);
+      for (const [page, rects] of byPage) {
+        map.set(page, [...(map.get(page) ?? []), { id: a.id, type: a.type, hex, rects }]);
+      }
+    }
+    return map;
+  }, [annotations, colors]);
+
+  const report = (e: unknown) => {
+    setNoteError((e as Error).message || "儲存失敗");
+    setTimeout(() => setNoteError(""), 4000);
+  };
+
+  const addAnnotation = useCallback(
+    async (input: NewAnnotation, opts: { select?: boolean; focus?: boolean } = {}) => {
+      try {
+        const a = await api.createAnnotation(docId, input);
+        setAnnotations((prev) => sortAnnotations([...prev, a]));
+        if (opts.select) {
+          setNotesOpen(true);
+          setSelectedId(a.id);
+        }
+        if (opts.focus) setFocusId(a.id);
+        return a;
+      } catch (e) {
+        report(e);
+      }
+    },
+    [docId],
+  );
+
+  const highlightSelection = useCallback(
+    async (color: string, withNote = false) => {
+      const sel = textSel;
+      if (!sel) return;
+      window.getSelection()?.removeAllRanges();
+      setTextSel(null);
+      await addAnnotation(
+        { type: "highlight", color, rects: sel.rects, quote: sel.quote, prefix: sel.prefix, suffix: sel.suffix },
+        { select: withNote, focus: withNote },
+      );
+    },
+    [textSel, addAnnotation],
+  );
+
+  const onArea = useCallback(
+    (page: number, rect: NormRect, image: string) => {
+      setAreaMode(false);
+      addAnnotation({ type: "area", color: colors[0].key, rects: [rect], image }, { select: true, focus: true });
+    },
+    [addAnnotation, colors],
+  );
+
+  const onPick = useCallback((id: string | null) => {
+    setSelectedId(id);
+    if (id) setNotesOpen(true);
+  }, []);
+
+  const updateNote = useCallback((id: string, patch: { color?: string; comment?: string; tags?: string[] }) => {
+    setAnnotations((prev) => prev.map((a) => (a.id === id ? { ...a, ...patch } : a)));
+    api
+      .updateAnnotation(id, patch)
+      .then((saved) => setAnnotations((prev) => prev.map((a) => (a.id === id ? { ...saved, comment: a.comment } : a))))
+      .catch(report);
+  }, []);
+
+  const deleteNote = useCallback((id: string) => {
+    setAnnotations((prev) => prev.filter((a) => a.id !== id));
+    setSelectedId(null);
+    api.deleteAnnotation(id).catch(report);
+  }, []);
+
+  /** Scroll an annotation into view and blink it. */
+  const jumpTo = useCallback(
+    (a: Annotation) => {
+      const el = scroller.current;
+      const r = a.rects[0];
+      if (el && r && offsets.length) {
+        el.scrollTop = offsets[r.page - 1] + r.y * sizes[r.page - 1].height * scale - el.clientHeight * 0.3;
+        setFlash({ id: a.id, n: Date.now() });
+      } else if (a.page) goToPage(a.page);
+    },
+    [offsets, sizes, scale, goToPage],
+  );
+  useEffect(() => {
+    if (!flash) return;
+    const t = setTimeout(() => setFlash(null), 1500);
+    return () => clearTimeout(t);
+  }, [flash]);
+
+  // Track the text selection to show the colour toolbar.
+  const refreshSelection = useCallback(() => {
+    if (scroller.current) setTextSel(readSelection(scroller.current));
+  }, []);
+  useEffect(() => {
+    const onChange = () => {
+      const sel = window.getSelection();
+      if (!sel || sel.isCollapsed) setTextSel(null);
+    };
+    document.addEventListener("selectionchange", onChange);
+    return () => document.removeEventListener("selectionchange", onChange);
+  }, []);
+
   /* -------------------------------------------------------------- shortcuts */
 
   useEffect(() => {
@@ -244,11 +396,25 @@ export function Reader({ docId }: { docId: string }) {
       } else if (mod && e.key === "0") {
         e.preventDefault();
         changeScale(fitScale(), "fit");
+      } else if (mod || e.altKey || isTyping(e)) {
+        return;
+      } else if (textSel && /^[1-4]$/.test(e.key) && colors[Number(e.key) - 1]) {
+        e.preventDefault();
+        highlightSelection(colors[Number(e.key) - 1].key);
+      } else if (textSel && e.key.toLowerCase() === "n") {
+        e.preventDefault();
+        highlightSelection(colors[0].key, true);
+      } else if (e.key.toLowerCase() === "a" && pdf) {
+        e.preventDefault();
+        setAreaMode((m) => !m);
+      } else if (e.key === "Escape") {
+        setAreaMode(false);
+        setSelectedId(null);
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [scale, changeScale, fitScale]);
+  }, [scale, changeScale, fitScale, textSel, colors, highlightSelection, pdf]);
 
   /* ----------------------------------------------------------------- render */
 
@@ -332,7 +498,28 @@ export function Reader({ docId }: { docId: string }) {
         >
           🔍
         </button>
+        <button
+          className={`btn px-2 py-1 text-xs ${areaMode ? "border-indigo-500 bg-indigo-50 text-indigo-700" : ""}`}
+          aria-pressed={areaMode}
+          title="框選圖表或公式（A）"
+          onClick={() => setAreaMode((m) => !m)}
+        >
+          ⬚ 框選
+        </button>
+        <button
+          className={`btn px-2 py-1 text-xs ${notesOpen ? "border-indigo-300 text-indigo-700" : ""}`}
+          aria-label="切換筆記側欄"
+          onClick={() => setNotesOpen((o) => !o)}
+        >
+          📝 筆記 {annotations.length || ""}
+        </button>
       </header>
+      {areaMode && (
+        <div className="bg-indigo-600 py-1 text-center text-xs text-white">
+          框選模式：在頁面上拖曳出範圍即可擷取（Esc 取消）
+        </div>
+      )}
+      {noteError && <div className="bg-red-600 py-1 text-center text-xs text-white">{noteError}</div>}
 
       <div className="flex min-h-0 flex-1">
         {panelOpen && pdf && (
@@ -379,7 +566,17 @@ export function Reader({ docId }: { docId: string }) {
           </aside>
         )}
 
-        <div ref={scroller} className="relative min-w-0 flex-1 overflow-auto" onScroll={updateVisible} data-testid="pdf-scroller">
+        <div
+          ref={scroller}
+          className="relative min-w-0 flex-1 overflow-auto"
+          onScroll={() => {
+            updateVisible();
+            if (textSel) refreshSelection();
+          }}
+          onMouseUp={() => setTimeout(refreshSelection, 0)}
+          onKeyUp={(e) => e.shiftKey && refreshSelection()}
+          data-testid="pdf-scroller"
+        >
           {error && <div className="m-8 rounded-lg bg-red-50 p-4 text-red-700">{error}</div>}
           {!pdf && !error && <div className="p-8 text-center text-slate-500">PDF 載入中…</div>}
           {pdf && (
@@ -394,12 +591,52 @@ export function Reader({ docId }: { docId: string }) {
                   active={visible.has(i + 1)}
                   query={query}
                   currentHit={currentHit?.page === i + 1 ? currentHit.index : -1}
+                  highlights={pageHighlights.get(i + 1) ?? NO_HIGHLIGHTS}
+                  selectedId={selectedId}
+                  flash={flash}
+                  areaMode={areaMode}
+                  onArea={onArea}
+                  onPick={onPick}
                 />
               ))}
             </div>
           )}
         </div>
+
+        {notesOpen && pdf && (
+          <aside className="w-80 shrink-0 border-l border-slate-200 bg-slate-50" data-testid="notes-panel">
+            <NotesPanel
+              annotations={annotations}
+              colors={colors}
+              setColors={setColors}
+              selectedId={selectedId}
+              focusId={focusId}
+              currentPage={currentPage}
+              onSelect={(a) => {
+                setSelectedId(a.id);
+                jumpTo(a);
+              }}
+              onUpdate={updateNote}
+              onDelete={deleteNote}
+              onAddNote={(page) => addAnnotation({ type: "note", page }, { select: true, focus: true })}
+            />
+          </aside>
+        )}
       </div>
+
+      {textSel && !areaMode && (
+        <SelectionToolbar
+          anchor={textSel.anchor}
+          colors={colors}
+          onColor={(c) => highlightSelection(c)}
+          onNote={() => highlightSelection(colors[0].key, true)}
+          onCopy={() => {
+            navigator.clipboard?.writeText(textSel.quote);
+            window.getSelection()?.removeAllRanges();
+            setTextSel(null);
+          }}
+        />
+      )}
     </div>
   );
 }

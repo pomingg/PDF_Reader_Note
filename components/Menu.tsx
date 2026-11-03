@@ -10,7 +10,18 @@ export interface MenuItem {
 }
 
 /** A small "⋯" dropdown menu. */
-export function Menu({ items, className = "" }: { items: MenuItem[]; className?: string }) {
+export function Menu({
+  items,
+  className = "",
+  trigger,
+  triggerClassName,
+}: {
+  items: MenuItem[];
+  className?: string;
+  /** Custom button content (defaults to "⋯"). */
+  trigger?: React.ReactNode;
+  triggerClassName?: string;
+}) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -24,15 +35,15 @@ export function Menu({ items, className = "" }: { items: MenuItem[]; className?:
     <div ref={ref} className={`relative ${className}`}>
       <button
         type="button"
-        aria-label="更多動作"
-        className="flex h-6 w-6 items-center justify-center rounded text-slate-500 hover:bg-slate-200"
+        aria-label={trigger ? undefined : "更多動作"}
+        className={triggerClassName ?? "flex h-6 w-6 items-center justify-center rounded text-slate-500 hover:bg-slate-200"}
         onClick={(e) => {
           e.preventDefault();
           e.stopPropagation();
           setOpen((o) => !o);
         }}
       >
-        ⋯
+        {trigger ?? "⋯"}
       </button>
       {open && (
         <div className="absolute right-0 z-40 mt-1 min-w-36 rounded-lg border border-slate-200 bg-white py-1 shadow-lg">

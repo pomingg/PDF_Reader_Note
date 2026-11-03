@@ -54,3 +54,110 @@ body {
     @apply inline-flex h-8 w-8 items-center justify-center rounded-lg text-slate-600 hover:bg-slate-100 disabled:opacity-40;
   }
 }
+
+/* rendered note Markdown */
+.markdown {
+  font-size: 0.875rem;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+.markdown > * + * {
+  margin-top: 0.5em;
+}
+.markdown h1,
+.markdown h2,
+.markdown h3 {
+  font-weight: 600;
+}
+.markdown h1 {
+  font-size: 1.1em;
+}
+.markdown ul {
+  list-style: disc;
+  padding-left: 1.25em;
+}
+.markdown ol {
+  list-style: decimal;
+  padding-left: 1.25em;
+}
+.markdown code {
+  background: #f1f5f9;
+  border-radius: 4px;
+  padding: 0 4px;
+  font-size: 0.9em;
+}
+.markdown pre {
+  background: #f1f5f9;
+  border-radius: 6px;
+  padding: 8px;
+  overflow-x: auto;
+}
+.markdown blockquote {
+  border-left: 3px solid #cbd5e1;
+  padding-left: 0.75em;
+  color: #475569;
+}
+.markdown a {
+  color: #4f46e5;
+  text-decoration: underline;
+}
+.markdown table {
+  border-collapse: collapse;
+}
+.markdown th,
+.markdown td {
+  border: 1px solid #e2e8f0;
+  padding: 2px 6px;
+}
+.markdown .katex-display {
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
+/* highlights drawn on the PDF pages */
+.hl-layer {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 1;
+}
+.hl-rect {
+  position: absolute;
+  mix-blend-mode: multiply;
+  border-radius: 2px;
+}
+.hl-area {
+  position: absolute;
+  border: 2px solid;
+  border-radius: 3px;
+}
+.hl-selected {
+  outline: 2px solid rgb(79 70 229 / 0.8);
+  outline-offset: 1px;
+}
+@keyframes hl-flash {
+  0%,
+  100% {
+    filter: none;
+  }
+  25%,
+  75% {
+    filter: brightness(0.6) saturate(2);
+  }
+}
+.hl-flash {
+  animation: hl-flash 0.6s ease-in-out 2;
+}
+.pdf-page .textLayer {
+  z-index: 2;
+}
+.area-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  cursor: crosshair;
+}
+.markdown .katex {
+  white-space: nowrap;
+  overflow-wrap: normal;
+}

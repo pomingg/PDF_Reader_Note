@@ -41,6 +41,7 @@ export function DocumentCard({
         <div className="mt-1 flex items-center gap-3 text-xs text-slate-400">
           <span>{doc.pageCount ? `${doc.pageCount} 頁` : "—"}</span>
           <span>{formatSize(doc.size)}</span>
+          {doc.annotationCount > 0 && <span className="text-indigo-500">📝 {doc.annotationCount}</span>}
           <span>{formatTime(doc.lastOpenedAt)}</span>
         </div>
         {doc.lastOpenedAt && doc.pageCount ? (
