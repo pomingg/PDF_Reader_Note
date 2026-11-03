@@ -1,4 +1,4 @@
-import Database from "better-sqlite3";
+import { DatabaseSync, type SQLInputValue } from "node:sqlite";
 import { mkdirSync } from "node:fs";
 import path from "node:path";
 
@@ -49,14 +49,66 @@ CREATE INDEX IF NOT EXISTS idx_documents_project ON documents(project_id);
 CREATE INDEX IF NOT EXISTS idx_documents_folder ON documents(folder_id);
 `;
 
-declare global {
-  // eslint-disable-next-line no-var
-  var __pdfNotesDb: Database.Database | undefined;
+/** A prepared statement. Rows come back as plain objects; callers cast them. */
+export interface Statement {
+  all(...params: unknown[]): unknown[];
+  get(...params: unknown[]): unknown;
+  run(...params: unknown[]): { changes: number | bigint; lastInsertRowid: number | bigint };
 }
 
-function open(): Database.Database {
+/**
+ * Thin wrapper over Node's built-in SQLite (node:sqlite), so nothing has to be
+ * compiled during `npm install`. Same file format as any other SQLite library.
+ */
+export interface Db {
+  prepare(sql: string): Statement;
+  exec(sql: string): void;
+  pragma(statement: string): void;
+  /** Wrap `fn` so it runs inside one transaction (nested calls join the outer one). */
+  transaction<T>(fn: () => T): () => T;
+}
+
+function wrap(raw: DatabaseSync): Db {
+  let depth = 0;
+  return {
+    prepare(sql) {
+      const stmt = raw.prepare(sql);
+      return {
+        all: (...p) => stmt.all(...(p as SQLInputValue[])),
+        get: (...p) => stmt.get(...(p as SQLInputValue[])),
+        run: (...p) => stmt.run(...(p as SQLInputValue[])),
+      };
+    },
+    exec: (sql) => raw.exec(sql),
+    pragma: (statement) => raw.exec(`PRAGMA ${statement}`),
+    transaction:
+      (fn) =>
+      () => {
+        if (depth > 0) return fn();
+        raw.exec("BEGIN IMMEDIATE");
+        depth++;
+        try {
+          const result = fn();
+          raw.exec("COMMIT");
+          return result;
+        } catch (err) {
+          raw.exec("ROLLBACK");
+          throw err;
+        } finally {
+          depth--;
+        }
+      },
+  };
+}
+
+declare global {
+  // eslint-disable-next-line no-var
+  var __pdfNotesDb: Db | undefined;
+}
+
+function open(): Db {
   mkdirSync(PDF_DIR, { recursive: true });
-  const db = new Database(path.join(DATA_DIR, "app.db"));
+  const db = wrap(new DatabaseSync(path.join(DATA_DIR, "app.db")));
   db.pragma("journal_mode = WAL");
   db.pragma("foreign_keys = ON");
   db.exec(SCHEMA);
@@ -68,7 +120,7 @@ function open(): Database.Database {
 }
 
 /** Single shared connection (survives Next.js dev hot reloads). */
-export function db(): Database.Database {
+export function db(): Db {
   if (!globalThis.__pdfNotesDb) globalThis.__pdfNotesDb = open();
   return globalThis.__pdfNotesDb;
 }
