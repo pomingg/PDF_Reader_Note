@@ -35,6 +35,10 @@ export interface DocumentItem {
   createdAt: number;
   updatedAt: number;
   annotationCount: number;
+  /** Increases each time the PDF file is replaced. */
+  fileVersion: number;
+  /** True until annotations embedded in the current PDF file have been imported. */
+  needsAnnotationScan: boolean;
 }
 
 export interface DocumentQuery {
@@ -73,6 +77,8 @@ export interface Annotation {
   /** URL of the snapshot image for area annotations. */
   imageUrl: string | null;
   source: "user" | "ai";
+  /** "pdf" when imported from annotations embedded in the PDF file. */
+  origin: "pdf" | null;
   tags: string[];
   createdAt: number;
   updatedAt: number;
@@ -90,6 +96,17 @@ export interface NewAnnotation {
   tags?: string[];
   /** data:image/png;base64,... for area snapshots */
   image?: string;
+}
+
+/** An annotation found inside the PDF file, ready to import. */
+export interface ImportedAnnotation extends NewAnnotation {
+  /** Stable key so the same embedded annotation is never imported twice. */
+  externalKey: string;
+}
+
+export interface ImportResult {
+  created: Annotation[];
+  skipped: number;
 }
 
 export interface Tag {

@@ -24,6 +24,8 @@ export function NotesPanel({
   onUpdate,
   onDelete,
   onAddNote,
+  onImport,
+  importing,
 }: {
   annotations: Annotation[];
   colors: ColorDef[];
@@ -36,6 +38,8 @@ export function NotesPanel({
   onUpdate: (id: string, patch: { color?: string; comment?: string; tags?: string[] }) => void;
   onDelete: (id: string) => void;
   onAddNote: (page: number | null) => void;
+  onImport: () => void;
+  importing: boolean;
 }) {
   const [colorFilter, setColorFilter] = useState<string | null>(null);
   const [typeFilter, setTypeFilter] = useState<TypeFilter>("all");
@@ -63,6 +67,15 @@ export function NotesPanel({
           <span className="flex-1 text-sm font-semibold">
             筆記 <span className="font-normal text-slate-400">{annotations.length}</span>
           </span>
+          <button
+            className="icon-btn h-7 w-7"
+            title="匯入其他 PDF 軟體（Acrobat、Edge、iPad App…）存在這份 PDF 裡的重點與備註"
+            aria-label="從 PDF 匯入註解"
+            disabled={importing}
+            onClick={onImport}
+          >
+            {importing ? "…" : "⤓"}
+          </button>
           <button className="icon-btn h-7 w-7" title="顏色意義設定" aria-label="顏色設定" onClick={() => setEditingColors(true)}>
             ⚙
           </button>
@@ -236,6 +249,11 @@ function NoteCard({
         <span>{TYPE_LABEL[a.type]}</span>
         <span>{a.page ? `p.${a.page}` : "整份文件"}</span>
         {a.source === "ai" && <span className="rounded bg-violet-100 px-1 text-violet-700">AI</span>}
+        {a.origin === "pdf" && (
+          <span className="rounded bg-sky-100 px-1 text-sky-700" title="從 PDF 檔內建的註解匯入">
+            PDF 匯入
+          </span>
+        )}
         <span className="flex-1" />
         {selected && (
           <button

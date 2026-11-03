@@ -3,7 +3,16 @@ import path from "node:path";
 import { nanoid } from "nanoid";
 import { db, SNAPSHOT_DIR } from "./db";
 import { HttpError, getDocument } from "./library";
-import { DEFAULT_COLORS, type Annotation, type ColorDef, type NewAnnotation, type NormRect, type Tag } from "./types";
+import {
+  DEFAULT_COLORS,
+  type Annotation,
+  type ColorDef,
+  type ImportedAnnotation,
+  type ImportResult,
+  type NewAnnotation,
+  type NormRect,
+  type Tag,
+} from "./types";
 
 interface AnnotationRow {
   id: string;
@@ -18,6 +27,7 @@ interface AnnotationRow {
   comment: string;
   image: string | null;
   source: "user" | "ai";
+  origin: "pdf" | null;
   created_at: number;
   updated_at: number;
   tags: string | null;
@@ -41,6 +51,7 @@ const toAnnotation = (r: AnnotationRow): Annotation => ({
   comment: r.comment,
   imageUrl: r.image ? `/api/annotations/${r.id}/image?v=${r.updated_at}` : null,
   source: r.source,
+  origin: r.origin ?? null,
   tags: ((r.tags ? JSON.parse(r.tags) : []) as string[]).sort((a, b) => a.localeCompare(b)),
   createdAt: r.created_at,
   updatedAt: r.updated_at,
@@ -94,7 +105,11 @@ function saveSnapshot(id: string, dataUrl: string): string {
   return name;
 }
 
-export function createAnnotation(documentId: string, input: NewAnnotation): Annotation {
+export function createAnnotation(
+  documentId: string,
+  input: NewAnnotation,
+  meta: { origin?: "pdf"; externalKey?: string } = {},
+): Annotation {
   getDocument(documentId);
   if (!["highlight", "area", "note"].includes(input.type)) throw new HttpError(400, "未知的筆記類型");
   const rects = cleanRects(input.rects);
@@ -110,8 +125,8 @@ export function createAnnotation(documentId: string, input: NewAnnotation): Anno
     db()
       .prepare(
         `INSERT INTO annotations (id, document_id, type, color, page, rects, quote, prefix, suffix, comment, image,
-           source, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'user', ?, ?)`,
+           source, origin, external_key, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'user', ?, ?, ?, ?)`,
       )
       .run(
         id,
@@ -125,12 +140,87 @@ export function createAnnotation(documentId: string, input: NewAnnotation): Anno
         (input.suffix ?? "").slice(0, 200),
         input.comment ?? "",
         image,
+        meta.origin ?? null,
+        meta.externalKey ?? null,
         now,
         now,
       );
     setTags(id, cleanTags(input.tags));
   })();
   return getAnnotation(id);
+}
+
+/** Overlap of two boxes as a share of the smaller one (0-1). */
+function overlap(a: NormRect, b: NormRect) {
+  const w = Math.min(a.x + a.w, b.x + b.w) - Math.max(a.x, b.x);
+  const h = Math.min(a.y + a.h, b.y + b.h) - Math.max(a.y, b.y);
+  if (w <= 0 || h <= 0) return 0;
+  return (w * h) / Math.max(1e-9, Math.min(a.w * a.h, b.w * b.h));
+}
+
+function boundingBox(rects: NormRect[]): NormRect | null {
+  if (!rects.length) return null;
+  const x = Math.min(...rects.map((r) => r.x));
+  const y = Math.min(...rects.map((r) => r.y));
+  return {
+    page: rects[0].page,
+    x,
+    y,
+    w: Math.max(...rects.map((r) => r.x + r.w)) - x,
+    h: Math.max(...rects.map((r) => r.y + r.h)) - y,
+  };
+}
+
+/**
+ * Import annotations found inside the PDF file. Skips ones imported before
+ * (same key) and ones that duplicate a note already here at the same spot,
+ * e.g. our own highlights coming back from a PDF exported with notes.
+ */
+export function importAnnotations(documentId: string, items: ImportedAnnotation[], fileVersion?: number): ImportResult {
+  getDocument(documentId);
+  const existing = listAnnotations(documentId);
+  const keys = new Set(
+    (db().prepare(`SELECT external_key FROM annotations WHERE document_id = ? AND external_key IS NOT NULL`).all(documentId) as {
+      external_key: string;
+    }[]).map((r) => r.external_key),
+  );
+  const created: Annotation[] = [];
+  let skipped = 0;
+
+  db().transaction(() => {
+    for (const item of items.slice(0, 2000)) {
+      const key = String(item.externalKey ?? "").slice(0, 300);
+      if (!key || keys.has(key)) {
+        skipped++;
+        continue;
+      }
+      const box = boundingBox(cleanRects(item.rects));
+      const page = box?.page ?? item.page ?? null;
+      const dup = existing.some((a) => {
+        if (a.type !== item.type || (a.page ?? null) !== page) return false;
+        if (a.type === "note") return a.comment.trim() === (item.comment ?? "").trim();
+        const other = boundingBox(a.rects.filter((r) => r.page === page));
+        return !!box && !!other && overlap(box, other) > 0.8;
+      });
+      keys.add(key);
+      if (dup) {
+        skipped++;
+        continue;
+      }
+      try {
+        const a = createAnnotation(documentId, item, { origin: "pdf", externalKey: key });
+        created.push(a);
+        existing.push(a);
+      } catch (err) {
+        if (!(err instanceof HttpError)) throw err;
+        skipped++; // e.g. a highlight with no readable text
+      }
+    }
+    if (fileVersion != null) {
+      db().prepare(`UPDATE documents SET annots_scanned_version = ? WHERE id = ?`).run(fileVersion, documentId);
+    }
+  })();
+  return { created, skipped };
 }
 
 export function updateAnnotation(

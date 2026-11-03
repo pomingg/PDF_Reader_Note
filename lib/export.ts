@@ -252,11 +252,11 @@ const TABLES: Record<string, string[]> = {
   folders: ["id", "project_id", "parent_id", "name", "sort", "created_at"],
   documents: [
     "id", "project_id", "folder_id", "title", "filename", "size", "page_count", "last_page", "last_opened_at",
-    "created_at", "updated_at",
+    "created_at", "updated_at", "file_version", "annots_scanned_version",
   ],
   annotations: [
     "id", "document_id", "type", "color", "page", "rects", "quote", "prefix", "suffix", "comment", "image",
-    "source", "created_at", "updated_at",
+    "source", "origin", "external_key", "created_at", "updated_at",
   ],
   tags: ["id", "name", "created_at"],
   annotation_tags: ["annotation_id", "tag_id"],
