@@ -354,7 +354,7 @@ export function restoreBackup(zip: Uint8Array): RestoreResult {
   writeFileSync(safety, zipSync(buildBackup()));
 
   const d = db();
-  d.transaction(() => {
+  const replaceAll = d.transaction(() => {
     d.pragma("defer_foreign_keys = ON");
     for (const t of Object.keys(TABLES).reverse()) d.prepare(`DELETE FROM ${t}`).run();
     for (const [t, cols] of Object.entries(TABLES)) {
@@ -365,7 +365,13 @@ export function restoreBackup(zip: Uint8Array): RestoreResult {
       `INSERT OR IGNORE INTO projects (id, name, color, icon, description, sort, is_system, created_at)
        VALUES (?, '未分類', '#94a3b8', '📥', '尚未歸類的文件', 9999, 1, ?)`,
     ).run(UNFILED_PROJECT_ID, Date.now());
-  })();
+  });
+  try {
+    replaceAll(); // all or nothing: any bad row rolls the whole restore back
+  } catch (err) {
+    console.error("restore failed", err);
+    throw new HttpError(400, "備份檔中的資料有誤，已取消還原，目前資料沒有任何變更");
+  }
 
   for (const [name, data] of pdfs) writeFileSync(path.join(PDF_DIR, name), data);
   for (const [name, data] of snaps) writeFileSync(path.join(SNAPSHOT_DIR, name), data);

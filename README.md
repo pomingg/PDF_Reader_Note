@@ -17,7 +17,9 @@
 
 ## 安裝與執行
 
-需要 [Node.js](https://nodejs.org/) 20 以上。
+需要 [Node.js](https://nodejs.org/) **22.13 以上**（建議安裝 24 LTS）。不需要 Visual Studio 或其他編譯工具。
+
+> 使用 Node 22 時，啟動會出現一行 `ExperimentalWarning: SQLite is an experimental feature`，可以忽略；Node 24 不會出現。
 
 ```bash
 git clone https://github.com/pomingg/PDF_Reader_Note.git
@@ -87,7 +89,7 @@ PDF_NOTES_DATA_DIR=/path/to/my-data npm start
 
 - Next.js 16（App Router）＋ React 19 ＋ Tailwind CSS 4
 - pdf.js（`pdfjs-dist`）渲染 PDF 與文字層，CMap 與標準字型由 `public/pdfjs/` 提供，`npm install` 時會自動從套件複製過去，確保中文 PDF 正確顯示
-- SQLite（`better-sqlite3`）
+- SQLite：使用 Node 內建的 `node:sqlite`，安裝時不需要編譯原生套件
 - 筆記以 Markdown 儲存，用 `react-markdown` ＋ KaTeX 顯示
 - 每個重點同時記錄兩種位置：頁面上的相對座標（0–1，不受縮放影響）與原文文字＋前後文，之後的 AI 檢索會用到後者
 
