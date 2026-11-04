@@ -87,6 +87,20 @@ CREATE TABLE IF NOT EXISTS settings (
   key   TEXT PRIMARY KEY,
   value TEXT NOT NULL
 );
+
+-- Raw data received from reading apps (e.g. the HyRead browser extension), kept
+-- for troubleshooting and for re-parsing when the parser improves.
+CREATE TABLE IF NOT EXISTS integration_captures (
+  id          TEXT PRIMARY KEY,
+  source      TEXT NOT NULL,
+  url         TEXT NOT NULL DEFAULT '',
+  kind        TEXT NOT NULL DEFAULT 'response',
+  page_title  TEXT NOT NULL DEFAULT '',
+  payload     TEXT NOT NULL,
+  status      TEXT NOT NULL DEFAULT 'stored',  -- stored | parsed | unparsed | error
+  detail      TEXT NOT NULL DEFAULT '',
+  created_at  INTEGER NOT NULL
+);
 `;
 
 /** A prepared statement. Rows come back as plain objects; callers cast them. */
@@ -171,6 +185,18 @@ const ADDED_COLUMNS: [table: string, column: string, definition: string][] = [
   ["documents", "file_version", "INTEGER"],
   // file_version whose embedded annotations were already imported (NULL = never)
   ["documents", "annots_scanned_version", "INTEGER"],
+  // 'pdf' (NULL) or 'ebook' (a book read elsewhere, e.g. HyRead: notes only, no file)
+  ["documents", "kind", "TEXT"],
+  ["documents", "author", "TEXT"],
+  // where an ebook comes from ('hyread', ...) and its id there
+  ["documents", "source", "TEXT"],
+  ["documents", "external_id", "TEXT"],
+  // position inside an ebook (chapter / page / CFI), shown instead of a page number
+  ["annotations", "location", "TEXT"],
+  // 1 when the note was deleted in the source app (kept here, shown as removed)
+  ["annotations", "external_removed", "INTEGER"],
+  // last note text received from the source app, to tell whether the user edited it here since
+  ["annotations", "external_note", "TEXT"],
 ];
 
 function migrate(db: Db) {
@@ -179,6 +205,7 @@ function migrate(db: Db) {
     if (!cols.some((c) => c.name === column)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
   }
   db.exec(`CREATE INDEX IF NOT EXISTS idx_annotations_external ON annotations(document_id, external_key)`);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_documents_external ON documents(source, external_id)`);
 }
 
 /** Single shared connection (survives Next.js dev hot reloads). */

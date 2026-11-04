@@ -1,5 +1,6 @@
 "use client";
 
+import { colorKeyFromRgb } from "@/lib/colors";
 import type { ImportedAnnotation, NormRect } from "@/lib/types";
 import type { PDFDocumentProxy, PDFPageProxy } from "./pdfjs";
 
@@ -30,22 +31,7 @@ interface TextItem {
 }
 
 /** Map an annotation colour onto the nearest of our four highlighter colours by hue. */
-export function colorKey(rgb: ArrayLike<number> | null | undefined): string {
-  if (!rgb || rgb.length < 3) return "yellow";
-  const [r, g, b] = [rgb[0] / 255, rgb[1] / 255, rgb[2] / 255];
-  const max = Math.max(r, g, b);
-  const min = Math.min(r, g, b);
-  if (max - min < 0.08) return "yellow"; // grey / black: no real colour
-  let h: number;
-  if (max === r) h = ((g - b) / (max - min)) % 6;
-  else if (max === g) h = (b - r) / (max - min) + 2;
-  else h = (r - g) / (max - min) + 4;
-  h = (h * 60 + 360) % 360;
-  if (h < 20 || h >= 290) return "red";
-  if (h < 75) return "yellow";
-  if (h < 170) return "green";
-  return "blue";
-}
+export const colorKey = colorKeyFromRgb;
 
 export const DOC_NOTE_PREFIX = "【文件筆記】";
 

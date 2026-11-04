@@ -1,0 +1,32 @@
+{
+  "manifest_version": 3,
+  "name": "PDF 閱讀筆記：HyRead 同步",
+  "version": "0.1.0",
+  "description": "把你在 HyRead 畫的重點與筆記，自動同步到自己電腦上的 PDF 閱讀筆記。只傳送劃線與備註，不讀取帳號密碼或 cookie。",
+  "permissions": ["storage"],
+  "host_permissions": [
+    "https://*.hyread.com.tw/*",
+    "https://hyread.com.tw/*",
+    "https://*.hyread.com/*",
+    "http://localhost/*",
+    "http://127.0.0.1/*"
+  ],
+  "background": { "service_worker": "background.js" },
+  "content_scripts": [
+    {
+      "matches": ["https://*.hyread.com.tw/*", "https://hyread.com.tw/*", "https://*.hyread.com/*"],
+      "js": ["hook.js"],
+      "world": "MAIN",
+      "run_at": "document_start",
+      "all_frames": true
+    },
+    {
+      "matches": ["https://*.hyread.com.tw/*", "https://hyread.com.tw/*", "https://*.hyread.com/*"],
+      "js": ["relay.js"],
+      "run_at": "document_start",
+      "all_frames": true
+    }
+  ],
+  "action": { "default_title": "HyRead 同步", "default_popup": "options.html" },
+  "options_page": "options.html"
+}

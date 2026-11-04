@@ -245,13 +245,17 @@ function Library() {
               menu={[
                 { label: "重新命名", onClick: () => setDialog({ kind: "rename", doc: d }) },
                 { label: "移動到…", onClick: () => setDialog({ kind: "move", doc: d }) },
-                {
-                  label: "更新 PDF 檔（保留筆記）",
-                  onClick: () => {
-                    replaceTarget.current = d;
-                    replaceInput.current?.click();
-                  },
-                },
+                ...(d.kind === "ebook"
+                  ? []
+                  : [
+                      {
+                        label: "更新 PDF 檔（保留筆記）",
+                        onClick: () => {
+                          replaceTarget.current = d;
+                          replaceInput.current?.click();
+                        },
+                      },
+                    ]),
                 { label: "刪除", danger: true, onClick: () => setDialog({ kind: "delete", doc: d }) },
               ]}
             />

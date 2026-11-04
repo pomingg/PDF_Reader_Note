@@ -39,6 +39,11 @@ export interface DocumentItem {
   fileVersion: number;
   /** True until annotations embedded in the current PDF file have been imported. */
   needsAnnotationScan: boolean;
+  /** "ebook": a book read in another app (e.g. HyRead); it has notes but no PDF file. */
+  kind: "pdf" | "ebook";
+  author: string | null;
+  /** App an ebook comes from, e.g. "hyread". */
+  source: string | null;
 }
 
 export interface DocumentQuery {
@@ -77,8 +82,12 @@ export interface Annotation {
   /** URL of the snapshot image for area annotations. */
   imageUrl: string | null;
   source: "user" | "ai";
-  /** "pdf" when imported from annotations embedded in the PDF file. */
-  origin: "pdf" | null;
+  /** "pdf": imported from the PDF file; "hyread" etc.: synced from that reading app. */
+  origin: string | null;
+  /** Position inside an ebook (chapter / page / location). */
+  location: string | null;
+  /** Deleted in the app it was synced from. */
+  removed: boolean;
   tags: string[];
   createdAt: number;
   updatedAt: number;

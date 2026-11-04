@@ -31,16 +31,22 @@ export function DocumentCard({
     >
       <div
         className="flex h-14 w-11 shrink-0 items-center justify-center rounded-md text-[10px] font-bold text-white"
-        style={{ background: project?.color ?? "#94a3b8" }}
+        style={{ background: doc.kind === "ebook" ? "#fb923c" : (project?.color ?? "#94a3b8") }}
       >
-        PDF
+        {doc.kind === "ebook" ? <span className="text-sm">書</span> : "PDF"}
       </div>
       <div className="min-w-0 flex-1">
         <div className="truncate font-medium text-slate-800">{doc.title}</div>
         {location && <div className="truncate text-xs text-slate-500">{location}</div>}
         <div className="mt-1 flex items-center gap-3 text-xs text-slate-400">
-          <span>{doc.pageCount ? `${doc.pageCount} 頁` : "—"}</span>
-          <span>{formatSize(doc.size)}</span>
+          {doc.kind === "ebook" ? (
+            <span className="text-orange-600">{doc.source === "hyread" ? "HyRead" : "電子書"}{doc.author ? `・${doc.author}` : ""}</span>
+          ) : (
+            <>
+              <span>{doc.pageCount ? `${doc.pageCount} 頁` : "—"}</span>
+              <span>{formatSize(doc.size)}</span>
+            </>
+          )}
           {doc.annotationCount > 0 && <span className="text-indigo-500">📝 {doc.annotationCount}</span>}
           <span>{formatTime(doc.lastOpenedAt)}</span>
         </div>

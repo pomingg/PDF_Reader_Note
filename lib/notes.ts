@@ -27,7 +27,9 @@ interface AnnotationRow {
   comment: string;
   image: string | null;
   source: "user" | "ai";
-  origin: "pdf" | null;
+  origin: string | null;
+  location: string | null;
+  external_removed: number | null;
   created_at: number;
   updated_at: number;
   tags: string | null;
@@ -52,6 +54,8 @@ const toAnnotation = (r: AnnotationRow): Annotation => ({
   imageUrl: r.image ? `/api/annotations/${r.id}/image?v=${r.updated_at}` : null,
   source: r.source,
   origin: r.origin ?? null,
+  location: r.location ?? null,
+  removed: !!r.external_removed,
   tags: ((r.tags ? JSON.parse(r.tags) : []) as string[]).sort((a, b) => a.localeCompare(b)),
   createdAt: r.created_at,
   updatedAt: r.updated_at,

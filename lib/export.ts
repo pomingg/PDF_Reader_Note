@@ -79,7 +79,9 @@ export function documentMarkdown(
     `title: ${yamlString(doc.title)}`,
     `project: ${yamlString(ctx.project.name)}`,
     ...(ctx.folderPath ? [`folder: ${yamlString(ctx.folderPath)}`] : []),
+    ...(doc.author ? [`author: ${yamlString(doc.author)}`] : []),
     ...(doc.pageCount ? [`pages: ${doc.pageCount}`] : []),
+    ...(doc.kind === "ebook" ? [`book_source: ${yamlString(doc.source ?? "ebook")}`] : []),
     `tags: [${allTags.map((t) => yamlString(t.replace(/\s+/g, "_"))).join(", ")}]`,
     `exported: ${date}`,
     `document_id: ${doc.id}`,
@@ -90,8 +92,11 @@ export function documentMarkdown(
     "",
   ];
 
-  const docNotes = annotations.filter((a) => a.type === "note" && a.page == null);
-  const anchored = annotations.filter((a) => !(a.type === "note" && a.page == null));
+  const ebook = doc.kind === "ebook";
+  // Notes about the whole document; in an ebook, synced notes sit at a location instead.
+  const isDocNote = (a: Annotation) => a.type === "note" && a.page == null && !a.location && !(ebook && a.origin);
+  const docNotes = annotations.filter(isDocNote);
+  const anchored = annotations.filter((a) => !isDocNote(a));
 
   if (docNotes.length) {
     out.push("## 文件筆記", "");
@@ -102,13 +107,24 @@ export function documentMarkdown(
   }
 
   let page = -1;
+  if (ebook && anchored.length) out.push("## 重點與筆記", "");
   for (const a of anchored) {
-    if (a.page !== page) {
+    if (!ebook && a.page !== page) {
       page = a.page ?? 0;
       out.push(`## 第 ${page} 頁`, "");
     }
     const ai = a.source === "ai" ? " 🤖" : "";
-    if (a.type === "note") {
+    const removed = a.removed ? "（來源已刪除）" : "";
+    if (ebook) {
+      const c = colorOf(a.color);
+      const where = a.location ? ` · ${a.location}` : "";
+      out.push(
+        a.type === "note"
+          ? `### 📝 筆記${where}${removed}`
+          : `### ${COLOR_EMOJI[a.color] ?? "🖍️"} ${c?.label ?? "重點"}${where}${removed}`,
+        "",
+      );
+    } else if (a.type === "note") {
       out.push(`### 📝 頁面筆記 · p.${a.page}${ai}`, "");
     } else {
       const c = colorOf(a.color);
@@ -252,11 +268,11 @@ const TABLES: Record<string, string[]> = {
   folders: ["id", "project_id", "parent_id", "name", "sort", "created_at"],
   documents: [
     "id", "project_id", "folder_id", "title", "filename", "size", "page_count", "last_page", "last_opened_at",
-    "created_at", "updated_at", "file_version", "annots_scanned_version",
+    "created_at", "updated_at", "file_version", "annots_scanned_version", "kind", "author", "source", "external_id",
   ],
   annotations: [
     "id", "document_id", "type", "color", "page", "rects", "quote", "prefix", "suffix", "comment", "image",
-    "source", "origin", "external_key", "created_at", "updated_at",
+    "source", "origin", "external_key", "location", "external_removed", "external_note", "created_at", "updated_at",
   ],
   tags: ["id", "name", "created_at"],
   annotation_tags: ["annotation_id", "tag_id"],
@@ -282,6 +298,7 @@ function buildBackup(): Zippable {
   const json: BackupJson = { app: "pdf-reader-note", version: BACKUP_VERSION, exportedAt: new Date().toISOString(), tables };
   const files: Zippable = { "backup.json": strToU8(JSON.stringify(json, null, 1)) };
   for (const d of tables.documents) {
+    if (!d.filename) continue; // ebook: no file
     const f = path.join(PDF_DIR, String(d.filename));
     if (existsSync(f)) files[`pdfs/${d.filename}`] = [readFileSync(f), { level: 0 }];
   }
@@ -331,6 +348,7 @@ export function restoreBackup(zip: Uint8Array): RestoreResult {
   // Every referenced file must be present and have a safe name.
   const pdfs = new Map<string, Uint8Array>();
   for (const d of json.tables.documents) {
+    if (d.kind === "ebook") continue; // ebooks have notes but no file
     const name = String(d.filename);
     if (!SAFE_FILE.test(name)) throw new HttpError(400, "備份檔中的 PDF 檔名不合法");
     const data = entries[`pdfs/${name}`];

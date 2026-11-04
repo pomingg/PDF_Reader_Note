@@ -279,6 +279,9 @@ interface DocumentRow {
   annotation_count: number;
   file_version: number | null;
   annots_scanned_version: number | null;
+  kind: string | null;
+  author: string | null;
+  source: string | null;
 }
 
 /** Documents with their annotation count, usable like a table. */
@@ -298,7 +301,10 @@ const toDocument = (r: DocumentRow): DocumentItem => ({
   updatedAt: r.updated_at,
   annotationCount: r.annotation_count,
   fileVersion: r.file_version ?? 1,
-  needsAnnotationScan: (r.annots_scanned_version ?? 0) < (r.file_version ?? 1),
+  needsAnnotationScan: r.kind !== "ebook" && (r.annots_scanned_version ?? 0) < (r.file_version ?? 1),
+  kind: r.kind === "ebook" ? "ebook" : "pdf",
+  author: r.author ?? null,
+  source: r.source ?? null,
 });
 
 export function listDocuments(query: DocumentQuery): DocumentItem[] {
@@ -336,7 +342,9 @@ function getDocumentRow(id: string): DocumentRow {
 export const getDocument = (id: string): DocumentItem => toDocument(getDocumentRow(id));
 
 export function documentFilePath(id: string): string {
-  return path.join(PDF_DIR, getDocumentRow(id).filename);
+  const row = getDocumentRow(id);
+  if (row.kind === "ebook" || !row.filename) throw new HttpError(400, "這是電子書筆記，沒有 PDF 檔");
+  return path.join(PDF_DIR, row.filename);
 }
 
 /** Resolve where a document should live, validating the project/folder pair. */
@@ -425,10 +433,11 @@ export function replaceDocumentFile(id: string, bytes: Buffer): DocumentItem {
 }
 
 export function deleteDocument(id: string): void {
-  const file = documentFilePath(id);
+  const row = getDocumentRow(id);
   db().prepare(`DELETE FROM documents WHERE id = ?`).run(id);
+  if (!row.filename) return; // ebooks have no file
   try {
-    unlinkSync(file);
+    unlinkSync(path.join(PDF_DIR, row.filename));
   } catch {
     /* file already gone */
   }

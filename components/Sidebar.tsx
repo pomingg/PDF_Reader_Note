@@ -133,6 +133,9 @@ export function Sidebar() {
         <Link href="/settings" className={navCls(pathname === "/settings")}>
           💾 匯出與備份
         </Link>
+        <Link href="/hyread" className={navCls(pathname === "/hyread")}>
+          🔄 HyRead 同步
+        </Link>
       </nav>
 
       <div className="mt-4 flex items-center justify-between px-4 pb-1">
