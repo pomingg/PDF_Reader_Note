@@ -3,15 +3,19 @@
 import { useEffect } from "react";
 import type {
   Annotation,
+  Bookmark,
   ColorDef,
   DocumentItem,
   DocumentQuery,
   Folder,
   ImportedAnnotation,
   ImportResult,
+  LinkedFolder,
   NewAnnotation,
   Project,
+  ScanResult,
   Tag,
+  ViewState,
 } from "./types";
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
@@ -60,7 +64,16 @@ export const api = {
   document: (id: string) => request<DocumentItem>(`/api/documents/${id}`),
   updateDocument: (
     id: string,
-    p: { title?: string; projectId?: string; folderId?: string | null; pageCount?: number; lastPage?: number; opened?: boolean },
+    p: {
+      title?: string;
+      projectId?: string;
+      folderId?: string | null;
+      pageCount?: number;
+      lastPage?: number;
+      opened?: boolean;
+      viewState?: ViewState | null;
+      localPath?: string;
+    },
   ) => send<DocumentItem>("PATCH", `/api/documents/${id}`, p),
   deleteDocument: (id: string) => send("DELETE", `/api/documents/${id}`),
   annotations: (documentId: string) => request<Annotation[]>(`/api/documents/${documentId}/annotations`),
@@ -79,6 +92,25 @@ export const api = {
   tags: () => request<Tag[]>("/api/tags"),
   colors: () => request<ColorDef[]>("/api/settings/colors"),
   saveColors: (c: ColorDef[]) => send<ColorDef[]>("PUT", "/api/settings/colors", c),
+
+  bookmarks: (documentId: string) => request<Bookmark[]>(`/api/documents/${documentId}/bookmarks`),
+  addBookmark: (documentId: string, page: number, title = "") =>
+    send<Bookmark>("POST", `/api/documents/${documentId}/bookmarks`, { page, title }),
+  renameBookmark: (id: string, title: string) => send<Bookmark>("PATCH", `/api/bookmarks/${id}`, { title }),
+  deleteBookmark: (id: string) => send("DELETE", `/api/bookmarks/${id}`),
+  linkedFolders: () => request<LinkedFolder[]>("/api/linked-folders"),
+  linkFolder: (b: { path: string; projectId: string; folderId?: string | null }) =>
+    send<{ folder: LinkedFolder; result: ScanResult }>("POST", "/api/linked-folders", b),
+  unlinkFolder: (id: string) => send("DELETE", `/api/linked-folders/${id}`),
+  scanLinked: (force = false) => send<ScanResult & { scanned: boolean }>("POST", "/api/linked-folders/scan", { force }),
+  listDir: (path?: string | null) =>
+    request<{
+      path: string | null;
+      parent: string | null;
+      dirs: { name: string; path: string }[];
+      pdfCount: number;
+      places: { name: string; path: string }[];
+    }>(`/api/fs/list${path ? `?path=${encodeURIComponent(path)}` : ""}`),
 
   upload: (files: File[], target: { projectId?: string; folderId?: string }) => {
     const form = new FormData();

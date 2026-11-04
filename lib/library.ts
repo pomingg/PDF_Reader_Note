@@ -1,8 +1,8 @@
-import { unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { nanoid } from "nanoid";
 import { db, PDF_DIR, UNFILED_PROJECT_ID } from "./db";
-import type { DocumentItem, DocumentQuery, Folder, Project } from "./types";
+import type { DocumentItem, DocumentQuery, Folder, Project, ViewState } from "./types";
 
 export class HttpError extends Error {
   constructor(
@@ -279,6 +279,9 @@ interface DocumentRow {
   annotation_count: number;
   file_version: number | null;
   annots_scanned_version: number | null;
+  local_path: string | null;
+  missing: number | null;
+  view_state: string | null;
 }
 
 /** Documents with their annotation count, usable like a table. */
@@ -299,7 +302,19 @@ const toDocument = (r: DocumentRow): DocumentItem => ({
   annotationCount: r.annotation_count,
   fileVersion: r.file_version ?? 1,
   needsAnnotationScan: (r.annots_scanned_version ?? 0) < (r.file_version ?? 1),
+  localPath: r.local_path ?? null,
+  missing: !!r.missing,
+  viewState: parseViewState(r.view_state),
 });
+
+function parseViewState(raw: string | null): ViewState | null {
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw) as ViewState;
+  } catch {
+    return null;
+  }
+}
 
 export function listDocuments(query: DocumentQuery): DocumentItem[] {
   const where: string[] = [];
@@ -336,8 +351,16 @@ function getDocumentRow(id: string): DocumentRow {
 export const getDocument = (id: string): DocumentItem => toDocument(getDocumentRow(id));
 
 export function documentFilePath(id: string): string {
-  return path.join(PDF_DIR, getDocumentRow(id).filename);
+  const row = getDocumentRow(id);
+  if (row.local_path) {
+    // Opened in place from a linked folder: only paths registered in the database are ever served.
+    if (!existsSync(row.local_path)) throw new HttpError(404, `找不到檔案：${row.local_path}`);
+    return row.local_path;
+  }
+  return path.join(PDF_DIR, row.filename);
 }
+
+export const isLinked = (id: string) => !!getDocumentRow(id).local_path;
 
 /** Resolve where a document should live, validating the project/folder pair. */
 function resolveLocation(projectId?: string | null, folderId?: string | null) {
@@ -378,9 +401,13 @@ export function updateDocument(
     pageCount?: number;
     lastPage?: number;
     opened?: boolean;
+    viewState?: ViewState | null;
+    /** Point a linked document at a new file location (e.g. after it was moved). */
+    localPath?: string;
   },
 ): DocumentItem {
   const cur = getDocumentRow(id);
+  if (patch.localPath !== undefined) relocate(id, cur, patch.localPath);
   const title = patch.title !== undefined ? patch.title.trim() : cur.title;
   if (!title) throw new HttpError(400, "文件名稱不可空白");
 
@@ -396,7 +423,7 @@ export function updateDocument(
   db()
     .prepare(
       `UPDATE documents SET title = ?, project_id = ?, folder_id = ?, page_count = ?, last_page = ?,
-         last_opened_at = ?, updated_at = ? WHERE id = ?`,
+         last_opened_at = ?, updated_at = ?, view_state = ? WHERE id = ?`,
     )
     .run(
       title,
@@ -406,13 +433,35 @@ export function updateDocument(
       patch.lastPage ?? cur.last_page,
       patch.opened ? Date.now() : cur.last_opened_at,
       moved ? Date.now() : cur.updated_at,
+      patch.viewState !== undefined ? (patch.viewState ? JSON.stringify(patch.viewState).slice(0, 2000) : null) : cur.view_state,
       id,
     );
   return getDocument(id);
 }
 
+/** Re-point a linked document to a file the user picked (keeps all its notes). */
+function relocate(id: string, cur: DocumentRow, newPath: string) {
+  if (!cur.local_path) throw new HttpError(400, "只有連結電腦資料夾的文件可以重新指定位置");
+  const p = path.resolve(newPath.trim());
+  if (!/\.pdf$/i.test(p)) throw new HttpError(400, "請選擇 PDF 檔");
+  let st;
+  try {
+    st = statSync(p);
+  } catch {
+    throw new HttpError(400, "找不到這個檔案");
+  }
+  if (!st.isFile()) throw new HttpError(400, "這不是檔案");
+  db()
+    .prepare(
+      `UPDATE documents SET local_path = ?, size = ?, file_mtime = ?, missing = 0,
+         file_version = COALESCE(file_version, 1) + 1, updated_at = ? WHERE id = ?`,
+    )
+    .run(p, st.size, Math.round(st.mtimeMs), Date.now(), id);
+}
+
 /** Swap in a new version of the PDF file, keeping every note. */
 export function replaceDocumentFile(id: string, bytes: Buffer): DocumentItem {
+  if (isLinked(id)) throw new HttpError(400, "這份文件是直接開啟電腦裡的檔案，請直接修改原檔");
   if (bytes.subarray(0, 5).toString("latin1") !== "%PDF-") throw new HttpError(400, "這不是 PDF 檔");
   writeFileSync(documentFilePath(id), bytes);
   db()
@@ -425,10 +474,15 @@ export function replaceDocumentFile(id: string, bytes: Buffer): DocumentItem {
 }
 
 export function deleteDocument(id: string): void {
-  const file = documentFilePath(id);
+  const row = getDocumentRow(id);
   db().prepare(`DELETE FROM documents WHERE id = ?`).run(id);
+  if (row.local_path) {
+    // Never delete the user's own file: just stop showing it (and don't re-add it on the next scan).
+    db().prepare(`INSERT OR IGNORE INTO linked_ignores (path) VALUES (?)`).run(row.local_path);
+    return;
+  }
   try {
-    unlinkSync(file);
+    unlinkSync(path.join(PDF_DIR, row.filename));
   } catch {
     /* file already gone */
   }

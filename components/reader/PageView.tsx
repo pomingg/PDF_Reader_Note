@@ -53,6 +53,7 @@ export const PageView = memo(function PageView({
   scale,
   dpr,
   left,
+  top,
   active,
   query,
   currentHit,
@@ -69,8 +70,9 @@ export const PageView = memo(function PageView({
   scale: number;
   /** window.devicePixelRatio */
   dpr: number;
-  /** Left offset in CSS px, already snapped to a device pixel. */
+  /** Position in CSS px inside the scroll area, already snapped to device pixels. */
   left: number;
+  top: number;
   active: boolean;
   query: string;
   /** Index of the search hit on this page to emphasise, or -1. */
@@ -221,7 +223,9 @@ export const PageView = memo(function PageView({
         {
           width: box.w,
           height: box.h,
-          marginLeft: left,
+          position: "absolute",
+          left,
+          top,
           "--total-scale-factor": scale,
           "--scale-round-x": "1px",
           "--scale-round-y": "1px",

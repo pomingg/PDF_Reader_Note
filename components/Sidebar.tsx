@@ -16,6 +16,7 @@ import {
 import type { Folder, Project } from "@/lib/types";
 import { ConfirmDialog, NameDialog, ProjectDialog } from "./LibraryDialogs";
 import { Menu } from "./Menu";
+import { ThemeSwitcher } from "./ThemeSwitcher";
 
 type DialogState =
   | { kind: "newProject" }
@@ -160,6 +161,10 @@ export function Sidebar() {
             setDialog={setDialog}
           />
         ))}
+      </div>
+
+      <div className="border-t border-slate-200 px-4 py-2">
+        <ThemeSwitcher />
       </div>
 
       {dialog?.kind === "newProject" && (

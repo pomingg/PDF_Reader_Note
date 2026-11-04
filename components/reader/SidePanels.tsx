@@ -116,7 +116,7 @@ function Thumb({
     <button ref={btn} onClick={() => onGo(page)} className="flex flex-col items-center gap-1">
       <canvas
         ref={ref}
-        className={`w-28 bg-white shadow ${current ? "ring-2 ring-indigo-500" : "ring-1 ring-slate-200"}`}
+        className={`thumb-canvas w-28 bg-white shadow ${current ? "ring-2 ring-indigo-500" : "ring-1 ring-slate-200"}`}
         style={{ aspectRatio: String(aspect) }}
       />
       <span className={`text-xs ${current ? "font-semibold text-indigo-600" : "text-slate-500"}`}>{page}</span>
@@ -262,3 +262,75 @@ export function SearchPanel({
     </div>
   );
 }
+
+/* ---------------------------------------------------------------- bookmarks */
+
+export function BookmarkPanel({
+  bookmarks,
+  currentPage,
+  onGo,
+  onRename,
+  onDelete,
+  onAdd,
+}: {
+  bookmarks: { id: string; page: number; title: string }[];
+  currentPage: number;
+  onGo: (page: number) => void;
+  onRename: (id: string, title: string) => void;
+  onDelete: (id: string) => void;
+  onAdd: () => void;
+}) {
+  const here = bookmarks.some((b) => b.page === currentPage);
+  return (
+    <div className="p-2" data-testid="bookmark-panel">
+      <button className="btn mb-2 w-full justify-center text-xs" onClick={onAdd} disabled={here}>
+        {here ? `第 ${currentPage} 頁已加入書籤` : `🔖 把第 ${currentPage} 頁加入書籤（B）`}
+      </button>
+      {bookmarks.map((b) => (
+        <div
+          key={b.id}
+          className={`group flex items-center gap-2 rounded px-2 py-1 text-sm hover:bg-slate-100 ${b.page === currentPage ? "bg-indigo-50" : ""}`}
+        >
+          <button className="w-10 shrink-0 text-left text-xs text-slate-400" onClick={() => onGo(b.page)}>
+            p.{b.page}
+          </button>
+          <input
+            className="min-w-0 flex-1 bg-transparent px-1 text-slate-700 outline-none focus:bg-white focus:ring-1 focus:ring-indigo-200"
+            defaultValue={b.title}
+            placeholder="（點這裡命名）"
+            aria-label={`第 ${b.page} 頁書籤名稱`}
+            onFocus={() => onGo(b.page)}
+            onBlur={(e) => e.target.value !== b.title && onRename(b.id, e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && (e.target as HTMLInputElement).blur()}
+          />
+          <button
+            className="hidden text-xs text-slate-400 hover:text-red-600 group-hover:block"
+            aria-label={`刪除第 ${b.page} 頁書籤`}
+            onClick={() => onDelete(b.id)}
+          >
+            ✕
+          </button>
+        </div>
+      ))}
+      {!bookmarks.length && <p className="p-4 text-center text-sm text-slate-400">還沒有書籤</p>}
+    </div>
+  );
+}
+
+/* ---------------------------------------------------------------- shortcuts */
+
+export const SHORTCUTS: [string, string][] = [
+  ["← / →", "上一頁／下一頁（雙頁模式一次兩頁）"],
+  ["PageUp / PageDown", "翻頁（單頁、雙頁模式）"],
+  ["Home / End", "第一頁／最後一頁"],
+  ["Ctrl/⌘ + F", "全文搜尋"],
+  ["Ctrl/⌘ + + / −", "放大／縮小"],
+  ["Ctrl/⌘ + 0", "符合寬度"],
+  ["B", "目前頁加入／移除書籤"],
+  ["F", "全螢幕"],
+  ["A", "框選模式"],
+  ["選取文字後 1–4", "用對應顏色畫重點"],
+  ["選取文字後 N", "畫重點並寫備註"],
+  ["Esc", "取消框選／取消選取"],
+  ["?", "顯示這份說明"],
+];
