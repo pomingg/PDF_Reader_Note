@@ -513,6 +513,15 @@ export function Reader({ docId }: { docId: string }) {
         >
           📝 筆記 {annotations.length || ""}
         </button>
+        <a
+          className="icon-btn"
+          title="匯出這份文件的筆記（Markdown）"
+          aria-label="匯出筆記"
+          href={`/api/export/markdown?documentId=${docId}`}
+          download
+        >
+          ⬇
+        </a>
       </header>
       {areaMode && (
         <div className="bg-indigo-600 py-1 text-center text-xs text-white">

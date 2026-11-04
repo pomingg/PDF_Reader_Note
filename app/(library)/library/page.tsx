@@ -143,6 +143,21 @@ function Library() {
               ＋ 新增資料夾
             </button>
           )}
+          {(projectId || view === "all") && (
+            <a
+              className="btn"
+              data-testid="export-scope"
+              title="把這裡所有文件的筆記匯出成 Markdown（zip）"
+              href={
+                projectId
+                  ? `/api/export/markdown?projectId=${projectId}${folderId ? `&folderId=${folderId}` : ""}`
+                  : "/api/export/markdown?all=1"
+              }
+              download
+            >
+              ⬇ 匯出筆記
+            </a>
+          )}
           <button className="btn btn-primary" disabled={uploading} onClick={() => fileInput.current?.click()}>
             {uploading ? "上傳中…" : "⬆ 上傳 PDF"}
           </button>
