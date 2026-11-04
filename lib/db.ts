@@ -153,11 +153,32 @@ function open(): Db {
   db.pragma("journal_mode = WAL");
   db.pragma("foreign_keys = ON");
   db.exec(SCHEMA);
+  migrate(db);
   db.prepare(
     `INSERT OR IGNORE INTO projects (id, name, color, icon, description, sort, is_system, created_at)
      VALUES (?, '未分類', '#94a3b8', '📥', '尚未歸類的文件', 9999, 1, ?)`,
   ).run(UNFILED_PROJECT_ID, Date.now());
   return db;
+}
+
+/** Columns added after the first release; added in place to existing databases. */
+const ADDED_COLUMNS: [table: string, column: string, definition: string][] = [
+  // NULL = created here, 'pdf' = imported from annotations embedded in the PDF file
+  ["annotations", "origin", "TEXT"],
+  // de-duplication key for imported annotations
+  ["annotations", "external_key", "TEXT"],
+  // bumped whenever the PDF file is replaced (NULL = 1)
+  ["documents", "file_version", "INTEGER"],
+  // file_version whose embedded annotations were already imported (NULL = never)
+  ["documents", "annots_scanned_version", "INTEGER"],
+];
+
+function migrate(db: Db) {
+  for (const [table, column, definition] of ADDED_COLUMNS) {
+    const cols = db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[];
+    if (!cols.some((c) => c.name === column)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+  }
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_annotations_external ON annotations(document_id, external_key)`);
 }
 
 /** Single shared connection (survives Next.js dev hot reloads). */

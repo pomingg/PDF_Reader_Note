@@ -1,4 +1,4 @@
-import { unlinkSync } from "node:fs";
+import { unlinkSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { nanoid } from "nanoid";
 import { db, PDF_DIR, UNFILED_PROJECT_ID } from "./db";
@@ -277,6 +277,8 @@ interface DocumentRow {
   created_at: number;
   updated_at: number;
   annotation_count: number;
+  file_version: number | null;
+  annots_scanned_version: number | null;
 }
 
 /** Documents with their annotation count, usable like a table. */
@@ -295,6 +297,8 @@ const toDocument = (r: DocumentRow): DocumentItem => ({
   createdAt: r.created_at,
   updatedAt: r.updated_at,
   annotationCount: r.annotation_count,
+  fileVersion: r.file_version ?? 1,
+  needsAnnotationScan: (r.annots_scanned_version ?? 0) < (r.file_version ?? 1),
 });
 
 export function listDocuments(query: DocumentQuery): DocumentItem[] {
@@ -404,6 +408,19 @@ export function updateDocument(
       moved ? Date.now() : cur.updated_at,
       id,
     );
+  return getDocument(id);
+}
+
+/** Swap in a new version of the PDF file, keeping every note. */
+export function replaceDocumentFile(id: string, bytes: Buffer): DocumentItem {
+  if (bytes.subarray(0, 5).toString("latin1") !== "%PDF-") throw new HttpError(400, "這不是 PDF 檔");
+  writeFileSync(documentFilePath(id), bytes);
+  db()
+    .prepare(
+      `UPDATE documents SET size = ?, file_version = COALESCE(file_version, 1) + 1, page_count = NULL, updated_at = ?
+       WHERE id = ?`,
+    )
+    .run(bytes.length, Date.now(), id);
   return getDocument(id);
 }
 

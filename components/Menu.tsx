@@ -15,12 +15,15 @@ export function Menu({
   className = "",
   trigger,
   triggerClassName,
+  label,
 }: {
   items: MenuItem[];
   className?: string;
   /** Custom button content (defaults to "⋯"). */
   trigger?: React.ReactNode;
   triggerClassName?: string;
+  /** Accessible name for the button (defaults to 更多動作 for the "⋯" button). */
+  label?: string;
 }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
@@ -35,7 +38,8 @@ export function Menu({
     <div ref={ref} className={`relative ${className}`}>
       <button
         type="button"
-        aria-label={trigger ? undefined : "更多動作"}
+        aria-label={label ?? (trigger ? undefined : "更多動作")}
+        title={label}
         className={triggerClassName ?? "flex h-6 w-6 items-center justify-center rounded text-slate-500 hover:bg-slate-200"}
         onClick={(e) => {
           e.preventDefault();

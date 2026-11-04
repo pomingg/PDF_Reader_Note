@@ -1,7 +1,18 @@
 "use client";
 
 import { useEffect } from "react";
-import type { Annotation, ColorDef, DocumentItem, DocumentQuery, Folder, NewAnnotation, Project, Tag } from "./types";
+import type {
+  Annotation,
+  ColorDef,
+  DocumentItem,
+  DocumentQuery,
+  Folder,
+  ImportedAnnotation,
+  ImportResult,
+  NewAnnotation,
+  Project,
+  Tag,
+} from "./types";
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
   const res = await fetch(url, init);
@@ -58,6 +69,13 @@ export const api = {
   updateAnnotation: (id: string, p: { color?: string; comment?: string; tags?: string[]; page?: number | null }) =>
     send<Annotation>("PATCH", `/api/annotations/${id}`, p),
   deleteAnnotation: (id: string) => send("DELETE", `/api/annotations/${id}`),
+  importAnnotations: (documentId: string, items: ImportedAnnotation[], fileVersion?: number) =>
+    send<ImportResult>("POST", `/api/documents/${documentId}/annotations/import`, { items, fileVersion }),
+  replaceFile: (documentId: string, file: File) => {
+    const form = new FormData();
+    form.set("file", file);
+    return request<DocumentItem>(`/api/documents/${documentId}/file`, { method: "PUT", body: form });
+  },
   tags: () => request<Tag[]>("/api/tags"),
   colors: () => request<ColorDef[]>("/api/settings/colors"),
   saveColors: (c: ColorDef[]) => send<ColorDef[]>("PUT", "/api/settings/colors", c),

@@ -49,6 +49,20 @@ function Library() {
   const [fileDrag, setFileDrag] = useState(false);
   const [error, setError] = useState("");
   const fileInput = useRef<HTMLInputElement>(null);
+  const replaceInput = useRef<HTMLInputElement>(null);
+  const replaceTarget = useRef<DocumentItem | null>(null);
+  const [message, setMessage] = useState("");
+
+  const replaceFile = async (doc: DocumentItem, file: File) => {
+    setError("");
+    try {
+      await api.replaceFile(doc.id, file);
+      setMessage(`已更新「${doc.title}」的 PDF 檔，筆記都保留著。下次開啟時會自動匯入新檔案裡的註解。`);
+      notifyLibraryChanged();
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  };
 
   const project = projects.find((p) => p.id === projectId);
   const crumbs = folderPath(folders, folderId);
@@ -173,6 +187,18 @@ function Library() {
               e.target.value = "";
             }}
           />
+          <input
+            ref={replaceInput}
+            type="file"
+            accept="application/pdf,.pdf"
+            hidden
+            data-testid="replace-input"
+            onChange={(e) => {
+              const f = e.target.files?.[0];
+              if (f && replaceTarget.current) replaceFile(replaceTarget.current, f);
+              e.target.value = "";
+            }}
+          />
         </div>
         {project?.description && !folderId && <p className="mt-1 text-sm text-slate-500">{project.description}</p>}
         {!projectId && view === "all" && (
@@ -195,6 +221,11 @@ function Library() {
         </div>
 
         {error && <p className="mt-3 text-sm text-red-600">{error}</p>}
+        {message && (
+          <p className="mt-3 text-sm text-emerald-700" data-testid="library-message">
+            {message}
+          </p>
+        )}
 
         {subfolders.length > 0 && (
           <div className="mt-6 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
@@ -214,6 +245,13 @@ function Library() {
               menu={[
                 { label: "重新命名", onClick: () => setDialog({ kind: "rename", doc: d }) },
                 { label: "移動到…", onClick: () => setDialog({ kind: "move", doc: d }) },
+                {
+                  label: "更新 PDF 檔（保留筆記）",
+                  onClick: () => {
+                    replaceTarget.current = d;
+                    replaceInput.current?.click();
+                  },
+                },
                 { label: "刪除", danger: true, onClick: () => setDialog({ kind: "delete", doc: d }) },
               ]}
             />

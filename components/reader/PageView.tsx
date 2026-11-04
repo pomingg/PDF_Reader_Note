@@ -10,11 +10,36 @@ export interface PageHighlight {
   type: "highlight" | "area" | "note";
   hex: string;
   rects: NormRect[];
+  /** Imported from the PDF file: the PDF already draws it, so only keep a clickable area. */
+  imported?: boolean;
 }
 
 export interface PageSize {
   width: number;
   height: number;
+}
+
+/** Round a CSS length so it lands exactly on a device pixel. */
+export const snapToDevice = (v: number, dpr: number) => Math.round(v * dpr) / dpr;
+
+/**
+ * On-screen size of a page in CSS pixels, snapped to whole device pixels so the
+ * canvas bitmap maps 1:1 onto the screen instead of being resampled (blurry).
+ */
+export function pageBox(size: PageSize, scale: number, dpr: number) {
+  return { w: snapToDevice(size.width * scale, dpr), h: snapToDevice(size.height * scale, dpr) };
+}
+
+/** Below this many device pixels per PDF point, render at 2x and let the browser scale down (smoother small text). */
+const OVERSAMPLE_BELOW = 1.25;
+/** Upper bound for one page's canvas, to keep memory in check. */
+const MAX_CANVAS_PIXELS = 16_000_000;
+
+function renderRatio(scale: number, dpr: number, box: { w: number; h: number }) {
+  let ratio = scale * dpr < OVERSAMPLE_BELOW ? dpr * 2 : dpr;
+  const pixels = box.w * box.h * ratio * ratio;
+  if (pixels > MAX_CANVAS_PIXELS) ratio *= Math.sqrt(MAX_CANVAS_PIXELS / pixels);
+  return ratio;
 }
 
 /**
@@ -26,6 +51,8 @@ export const PageView = memo(function PageView({
   pageNumber,
   size,
   scale,
+  dpr,
+  left,
   active,
   query,
   currentHit,
@@ -40,6 +67,10 @@ export const PageView = memo(function PageView({
   pageNumber: number;
   size: PageSize;
   scale: number;
+  /** window.devicePixelRatio */
+  dpr: number;
+  /** Left offset in CSS px, already snapped to a device pixel. */
+  left: number;
   active: boolean;
   query: string;
   /** Index of the search hit on this page to emphasise, or -1. */
@@ -90,16 +121,18 @@ export const PageView = memo(function PageView({
       const page = await pdf.getPage(pageNumber);
       if (cancelled) return;
       const viewport = page.getViewport({ scale });
-      const dpr = Math.min(window.devicePixelRatio || 1, 2);
+      const box = pageBox(size, scale, dpr);
+      const ratio = renderRatio(scale, dpr, box);
       const off = document.createElement("canvas");
-      off.width = Math.floor(viewport.width * dpr);
-      off.height = Math.floor(viewport.height * dpr);
+      off.width = Math.max(1, Math.round(box.w * ratio));
+      off.height = Math.max(1, Math.round(box.h * ratio));
       const ctx = off.getContext("2d")!;
+      // Stretch the viewport to fill the snapped bitmap exactly.
       renderTask = page.render({
         canvasContext: ctx,
         canvas: off,
         viewport,
-        transform: dpr !== 1 ? [dpr, 0, 0, dpr, 0, 0] : undefined,
+        transform: [off.width / viewport.width, 0, 0, off.height / viewport.height, 0, 0],
       });
       try {
         await renderTask.promise;
@@ -130,7 +163,7 @@ export const PageView = memo(function PageView({
       renderTask?.cancel();
       textLayer?.cancel();
     };
-  }, [pdf, pageNumber, scale, active]);
+  }, [pdf, pageNumber, scale, dpr, size, active]);
 
   useEffect(() => {
     pendingScroll.current = currentHit >= 0;
@@ -162,8 +195,7 @@ export const PageView = memo(function PageView({
     const canvas = canvasRef.current;
     setDrag(null);
     if (!areaRect || !canvas || !canvas.width) return;
-    const W = size.width * scale;
-    const H = size.height * scale;
+    const { w: W, h: H } = pageBox(size, scale, dpr);
     if (areaRect.w < 8 || areaRect.h < 8) return;
     const sx = canvas.width / W;
     const crop = document.createElement("canvas");
@@ -179,6 +211,7 @@ export const PageView = memo(function PageView({
     );
   };
 
+  const box = pageBox(size, scale, dpr);
   return (
     <div
       className="pdf-page"
@@ -186,8 +219,9 @@ export const PageView = memo(function PageView({
       onClick={pick}
       style={
         {
-          width: size.width * scale,
-          height: size.height * scale,
+          width: box.w,
+          height: box.h,
+          marginLeft: left,
           "--total-scale-factor": scale,
           "--scale-round-x": "1px",
           "--scale-round-y": "1px",
@@ -201,7 +235,7 @@ export const PageView = memo(function PageView({
             <div
               key={`${h.id}-${i}${flash?.id === h.id ? `-${flash.n}` : ""}`}
               data-annotation={h.id}
-              className={`${h.type === "area" ? "hl-area" : "hl-rect"} ${selectedId === h.id ? "hl-selected" : ""} ${
+              className={`${h.imported ? "hl-rect hl-imported" : h.type === "area" ? "hl-area" : "hl-rect"} ${selectedId === h.id ? "hl-selected" : ""} ${
                 flash?.id === h.id ? "hl-flash" : ""
               }`}
               style={{
@@ -209,9 +243,11 @@ export const PageView = memo(function PageView({
                 top: `${r.y * 100}%`,
                 width: `${r.w * 100}%`,
                 height: `${r.h * 100}%`,
-                ...(h.type === "area"
-                  ? { borderColor: h.hex, background: `${h.hex}22` }
-                  : { background: h.hex, opacity: 0.45 }),
+                ...(h.imported
+                  ? { background: "transparent" }
+                  : h.type === "area"
+                    ? { borderColor: h.hex, background: `${h.hex}22` }
+                    : { background: h.hex, opacity: 0.45 }),
               }}
             />
           )),

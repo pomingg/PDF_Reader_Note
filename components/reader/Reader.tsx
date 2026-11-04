@@ -13,8 +13,10 @@ import {
   type NormRect,
   type Project,
 } from "@/lib/types";
+import { Menu } from "@/components/Menu";
+import { extractPdfAnnotations } from "./importPdfAnnotations";
 import { colorHex, NotesPanel } from "./NotesPanel";
-import { PageView, type PageHighlight, type PageSize } from "./PageView";
+import { pageBox, PageView, snapToDevice, type PageHighlight, type PageSize } from "./PageView";
 import { readSelection, type TextSelection } from "./selection";
 import { SelectionToolbar } from "./SelectionToolbar";
 import { openPdf, type PDFDocumentProxy } from "./pdfjs";
@@ -74,6 +76,8 @@ export function Reader({ docId }: { docId: string }) {
   const [notesOpen, setNotesOpen] = useState(true);
   const [textSel, setTextSel] = useState<TextSelection | null>(null);
   const [noteError, setNoteError] = useState("");
+  const [notice, setNotice] = useState("");
+  const [importing, setImporting] = useState(false);
 
   const scroller = useRef<HTMLDivElement>(null);
   const searchInput = useRef<HTMLInputElement>(null);
@@ -94,7 +98,7 @@ export function Reader({ docId }: { docId: string }) {
         api.annotations(docId).then((a) => !cancelled && setAnnotations(sortAnnotations(a)));
         api.colors().then((c) => !cancelled && setColors(c));
 
-        const opened = await openPdf(`/api/documents/${docId}/file`);
+        const opened = await openPdf(`/api/documents/${docId}/file?v=${d.fileVersion}`);
         destroy = opened.destroy;
         const loaded = opened.pdf;
         if (cancelled) return destroy();
@@ -120,15 +124,53 @@ export function Reader({ docId }: { docId: string }) {
 
   /* ----------------------------------------------------------------- layout */
 
+  // Device pixel ratio changes when the window moves to another screen or the browser zoom changes.
+  const [dpr, setDpr] = useState(1);
+  useEffect(() => {
+    let mq: MediaQueryList | null = null;
+    const update = () => {
+      setDpr(window.devicePixelRatio || 1);
+      mq?.removeEventListener("change", update);
+      mq = window.matchMedia(`(resolution: ${window.devicePixelRatio || 1}dppx)`);
+      mq.addEventListener("change", update);
+    };
+    update();
+    return () => mq?.removeEventListener("change", update);
+  }, []);
+
+  // Width and screen position of the scroll area, used to centre pages on whole device pixels.
+  const [view, setView] = useState({ width: 0, originX: 0 });
+  useEffect(() => {
+    const el = scroller.current;
+    if (!el) return;
+    const measure = () => setView({ width: el.clientWidth, originX: el.getBoundingClientRect().left });
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [pdf]);
+
+  /** Page sizes on screen, snapped to device pixels so pages render sharply. */
+  const boxes = useMemo(() => sizes.map((s) => pageBox(s, scale, dpr)), [sizes, scale, dpr]);
+
   const offsets = useMemo(() => {
     const out: number[] = [];
     let y = PAD;
-    for (const s of sizes) {
+    for (const b of boxes) {
       out.push(y);
-      y += s.height * scale + GAP;
+      y += b.h + GAP;
     }
     return out;
-  }, [sizes, scale]);
+  }, [boxes]);
+
+  const contentWidth = useMemo(
+    () => Math.max(view.width, Math.max(0, ...boxes.map((b) => b.w)) + PAD * 2),
+    [boxes, view.width],
+  );
+  const pageLeft = useCallback(
+    (w: number) => snapToDevice(view.originX + Math.max(PAD, (contentWidth - w) / 2), dpr) - view.originX,
+    [contentWidth, dpr, view.originX],
+  );
 
   const maxWidth = useMemo(() => Math.max(1, ...sizes.map((s) => s.width)), [sizes]);
   const fitScale = useCallback(() => {
@@ -180,20 +222,20 @@ export function Reader({ docId }: { docId: string }) {
       const el = scroller.current;
       if (el && offsets.length) {
         const page = pageAt(el.scrollTop);
-        const h = sizes[page - 1].height * scale + GAP;
+        const h = boxes[page - 1].h + GAP;
         anchor.current = { page, frac: (el.scrollTop - offsets[page - 1]) / h };
       }
       setZoomMode(mode);
       setScale(Math.min(MAX_SCALE, Math.max(MIN_SCALE, Math.round(next * 100) / 100)));
     },
-    [offsets, pageAt, scale, sizes],
+    [offsets, pageAt, boxes],
   );
 
   useLayoutEffect(() => {
     const el = scroller.current;
     const a = anchor.current;
     if (el && a && offsets.length) {
-      el.scrollTop = offsets[a.page - 1] + a.frac * (sizes[a.page - 1].height * scale + GAP);
+      el.scrollTop = offsets[a.page - 1] + a.frac * (boxes[a.page - 1].h + GAP);
       anchor.current = null;
     }
     updateVisible();
@@ -276,11 +318,56 @@ export function Reader({ docId }: { docId: string }) {
       const byPage = new Map<number, NormRect[]>();
       for (const r of a.rects) byPage.set(r.page, [...(byPage.get(r.page) ?? []), r]);
       for (const [page, rects] of byPage) {
-        map.set(page, [...(map.get(page) ?? []), { id: a.id, type: a.type, hex, rects }]);
+        map.set(page, [...(map.get(page) ?? []), { id: a.id, type: a.type, hex, rects, imported: a.origin === "pdf" }]);
       }
     }
     return map;
   }, [annotations, colors]);
+
+  /**
+   * Bring in highlights / notes that other PDF apps saved inside the file.
+   * Runs by itself the first time a file version is opened; also from the notes panel.
+   */
+  const importFromPdf = useCallback(
+    async (manual: boolean) => {
+      if (!pdf || !doc) return;
+      setImporting(true);
+      try {
+        const items = await extractPdfAnnotations(pdf);
+        const res = await api.importAnnotations(docId, items, doc.fileVersion);
+        if (res.created.length) setAnnotations((prev) => sortAnnotations([...prev, ...res.created]));
+        setDoc((d) => (d ? { ...d, needsAnnotationScan: false } : d));
+        if (manual || res.created.length) {
+          setNotice(
+            res.created.length
+              ? `已從 PDF 匯入 ${res.created.length} 則註解${res.skipped ? `（略過 ${res.skipped} 則重複）` : ""}`
+              : items.length
+                ? `PDF 中的 ${items.length} 則註解都已匯入過`
+                : "這份 PDF 沒有其他軟體留下的註解",
+          );
+          setNotesOpen(true);
+        }
+      } catch (e) {
+        report(e);
+      } finally {
+        setImporting(false);
+      }
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [pdf, doc?.fileVersion, docId],
+  );
+  const autoImported = useRef(false);
+  useEffect(() => {
+    if (pdf && doc?.needsAnnotationScan && !autoImported.current) {
+      autoImported.current = true;
+      importFromPdf(false);
+    }
+  }, [pdf, doc?.needsAnnotationScan, importFromPdf]);
+  useEffect(() => {
+    if (!notice) return;
+    const t = setTimeout(() => setNotice(""), 5000);
+    return () => clearTimeout(t);
+  }, [notice]);
 
   const report = (e: unknown) => {
     setNoteError((e as Error).message || "儲存失敗");
@@ -352,7 +439,7 @@ export function Reader({ docId }: { docId: string }) {
       const el = scroller.current;
       const r = a.rects[0];
       if (el && r && offsets.length) {
-        el.scrollTop = offsets[r.page - 1] + r.y * sizes[r.page - 1].height * scale - el.clientHeight * 0.3;
+        el.scrollTop = offsets[r.page - 1] + r.y * boxes[r.page - 1].h - el.clientHeight * 0.3;
         setFlash({ id: a.id, n: Date.now() });
       } else if (a.page) goToPage(a.page);
     },
@@ -513,15 +600,21 @@ export function Reader({ docId }: { docId: string }) {
         >
           📝 筆記 {annotations.length || ""}
         </button>
-        <a
-          className="icon-btn"
-          title="匯出這份文件的筆記（Markdown）"
-          aria-label="匯出筆記"
-          href={`/api/export/markdown?documentId=${docId}`}
-          download
-        >
-          ⬇
-        </a>
+        <Menu
+          trigger="⬇"
+          triggerClassName="icon-btn"
+          label="匯出"
+          items={[
+            {
+              label: "匯出筆記（Markdown）",
+              onClick: () => (window.location.href = `/api/export/markdown?documentId=${docId}`),
+            },
+            {
+              label: "下載含重點的 PDF",
+              onClick: () => (window.location.href = `/api/documents/${docId}/annotated-pdf`),
+            },
+          ]}
+        />
       </header>
       {areaMode && (
         <div className="bg-indigo-600 py-1 text-center text-xs text-white">
@@ -529,6 +622,11 @@ export function Reader({ docId }: { docId: string }) {
         </div>
       )}
       {noteError && <div className="bg-red-600 py-1 text-center text-xs text-white">{noteError}</div>}
+      {notice && (
+        <div className="bg-emerald-600 py-1 text-center text-xs text-white" data-testid="notice">
+          {notice}
+        </div>
+      )}
 
       <div className="flex min-h-0 flex-1">
         {panelOpen && pdf && (
@@ -589,7 +687,7 @@ export function Reader({ docId }: { docId: string }) {
           {error && <div className="m-8 rounded-lg bg-red-50 p-4 text-red-700">{error}</div>}
           {!pdf && !error && <div className="p-8 text-center text-slate-500">PDF 載入中…</div>}
           {pdf && (
-            <div style={{ paddingTop: PAD, paddingBottom: PAD, minWidth: maxWidth * scale + PAD * 2 }}>
+            <div style={{ paddingTop: PAD, paddingBottom: PAD, width: contentWidth }}>
               {sizes.map((s, i) => (
                 <PageView
                   key={i}
@@ -597,6 +695,8 @@ export function Reader({ docId }: { docId: string }) {
                   pageNumber={i + 1}
                   size={s}
                   scale={scale}
+                  dpr={dpr}
+                  left={pageLeft(boxes[i]?.w ?? 0)}
                   active={visible.has(i + 1)}
                   query={query}
                   currentHit={currentHit?.page === i + 1 ? currentHit.index : -1}
@@ -628,6 +728,8 @@ export function Reader({ docId }: { docId: string }) {
               onUpdate={updateNote}
               onDelete={deleteNote}
               onAddNote={(page) => addAnnotation({ type: "note", page }, { select: true, focus: true })}
+              onImport={() => importFromPdf(true)}
+              importing={importing}
             />
           </aside>
         )}
