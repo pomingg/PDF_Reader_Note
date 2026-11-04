@@ -25,6 +25,7 @@ interface ProjectRow {
   is_system: number;
   created_at: number;
   document_count: number;
+  annotation_count: number;
   last_opened_at: number | null;
 }
 
@@ -38,11 +39,14 @@ const toProject = (r: ProjectRow): Project => ({
   isSystem: !!r.is_system,
   createdAt: r.created_at,
   documentCount: r.document_count,
+  annotationCount: r.annotation_count,
   lastOpenedAt: r.last_opened_at,
 });
 
 const PROJECT_SELECT = `
-  SELECT p.*, COUNT(d.id) AS document_count, MAX(d.last_opened_at) AS last_opened_at
+  SELECT p.*, COUNT(d.id) AS document_count, MAX(d.last_opened_at) AS last_opened_at,
+    (SELECT COUNT(*) FROM annotations a JOIN documents d2 ON d2.id = a.document_id
+     WHERE d2.project_id = p.id) AS annotation_count
   FROM projects p LEFT JOIN documents d ON d.project_id = p.id`;
 
 export function listProjects(): Project[] {
@@ -272,7 +276,12 @@ interface DocumentRow {
   last_opened_at: number | null;
   created_at: number;
   updated_at: number;
+  annotation_count: number;
 }
+
+/** Documents with their annotation count, usable like a table. */
+const DOCS = `(SELECT d.*, (SELECT COUNT(*) FROM annotations a WHERE a.document_id = d.id) AS annotation_count
+  FROM documents d)`;
 
 const toDocument = (r: DocumentRow): DocumentItem => ({
   id: r.id,
@@ -285,6 +294,7 @@ const toDocument = (r: DocumentRow): DocumentItem => ({
   lastOpenedAt: r.last_opened_at,
   createdAt: r.created_at,
   updatedAt: r.updated_at,
+  annotationCount: r.annotation_count,
 });
 
 export function listDocuments(query: DocumentQuery): DocumentItem[] {
@@ -309,12 +319,12 @@ export function listDocuments(query: DocumentQuery): DocumentItem[] {
   const order =
     query.view === "recent" ? "last_opened_at DESC" : "COALESCE(last_opened_at, 0) DESC, created_at DESC";
   const limit = query.view === "recent" ? "LIMIT 50" : "";
-  const sql = `SELECT * FROM documents ${where.length ? "WHERE " + where.join(" AND ") : ""} ORDER BY ${order} ${limit}`;
+  const sql = `SELECT * FROM ${DOCS} ${where.length ? "WHERE " + where.join(" AND ") : ""} ORDER BY ${order} ${limit}`;
   return (db().prepare(sql).all(...params) as DocumentRow[]).map(toDocument);
 }
 
 function getDocumentRow(id: string): DocumentRow {
-  const row = db().prepare(`SELECT * FROM documents WHERE id = ?`).get(id) as DocumentRow | undefined;
+  const row = db().prepare(`SELECT * FROM ${DOCS} WHERE id = ?`).get(id) as DocumentRow | undefined;
   if (!row) throw new HttpError(404, "找不到文件");
   return row;
 }

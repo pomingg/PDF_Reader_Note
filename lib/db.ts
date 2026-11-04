@@ -6,6 +6,7 @@ export const DATA_DIR = process.env.PDF_NOTES_DATA_DIR
   ? path.resolve(process.env.PDF_NOTES_DATA_DIR)
   : path.join(process.cwd(), "data");
 export const PDF_DIR = path.join(DATA_DIR, "pdfs");
+export const SNAPSHOT_DIR = path.join(DATA_DIR, "snapshots");
 
 /** The built-in project that holds documents not yet sorted anywhere. */
 export const UNFILED_PROJECT_ID = "unfiled";
@@ -47,6 +48,45 @@ CREATE TABLE IF NOT EXISTS documents (
 );
 CREATE INDEX IF NOT EXISTS idx_documents_project ON documents(project_id);
 CREATE INDEX IF NOT EXISTS idx_documents_folder ON documents(folder_id);
+
+-- Highlights, area snapshots and free notes. Each anchored annotation keeps two
+-- locators: normalised rects (0-1 of the page, zoom independent) and the quoted
+-- text with surrounding context, so it can be re-found and searched later.
+CREATE TABLE IF NOT EXISTS annotations (
+  id          TEXT PRIMARY KEY,
+  document_id TEXT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+  type        TEXT NOT NULL CHECK (type IN ('highlight', 'area', 'note')),
+  color       TEXT NOT NULL DEFAULT 'yellow',
+  page        INTEGER,            -- first page; NULL = note on the whole document
+  rects       TEXT NOT NULL DEFAULT '[]', -- JSON [{page,x,y,w,h}]
+  quote       TEXT NOT NULL DEFAULT '',
+  prefix      TEXT NOT NULL DEFAULT '',
+  suffix      TEXT NOT NULL DEFAULT '',
+  comment     TEXT NOT NULL DEFAULT '',  -- Markdown
+  image       TEXT,               -- snapshot file name for area annotations
+  source      TEXT NOT NULL DEFAULT 'user' CHECK (source IN ('user', 'ai')),
+  created_at  INTEGER NOT NULL,
+  updated_at  INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_annotations_document ON annotations(document_id);
+
+CREATE TABLE IF NOT EXISTS tags (
+  id         TEXT PRIMARY KEY,
+  name       TEXT NOT NULL UNIQUE COLLATE NOCASE,
+  created_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS annotation_tags (
+  annotation_id TEXT NOT NULL REFERENCES annotations(id) ON DELETE CASCADE,
+  tag_id        TEXT NOT NULL REFERENCES tags(id) ON DELETE CASCADE,
+  PRIMARY KEY (annotation_id, tag_id)
+);
+CREATE INDEX IF NOT EXISTS idx_annotation_tags_tag ON annotation_tags(tag_id);
+
+CREATE TABLE IF NOT EXISTS settings (
+  key   TEXT PRIMARY KEY,
+  value TEXT NOT NULL
+);
 `;
 
 /** A prepared statement. Rows come back as plain objects; callers cast them. */
@@ -108,6 +148,7 @@ declare global {
 
 function open(): Db {
   mkdirSync(PDF_DIR, { recursive: true });
+  mkdirSync(SNAPSHOT_DIR, { recursive: true });
   const db = wrap(new DatabaseSync(path.join(DATA_DIR, "app.db")));
   db.pragma("journal_mode = WAL");
   db.pragma("foreign_keys = ON");

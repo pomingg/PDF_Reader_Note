@@ -10,6 +10,7 @@ export interface Project {
   isSystem: boolean;
   createdAt: number;
   documentCount: number;
+  annotationCount: number;
   lastOpenedAt: number | null;
 }
 
@@ -33,6 +34,7 @@ export interface DocumentItem {
   lastOpenedAt: number | null;
   createdAt: number;
   updatedAt: number;
+  annotationCount: number;
 }
 
 export interface DocumentQuery {
@@ -43,3 +45,69 @@ export interface DocumentQuery {
   recursive?: boolean;
   q?: string;
 }
+
+/* ------------------------------------------------------------------ notes */
+
+export type AnnotationType = "highlight" | "area" | "note";
+
+/** A rectangle on one page, as fractions (0-1) of the page width / height. */
+export interface NormRect {
+  page: number;
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+export interface Annotation {
+  id: string;
+  documentId: string;
+  type: AnnotationType;
+  color: string;
+  page: number | null;
+  rects: NormRect[];
+  quote: string;
+  prefix: string;
+  suffix: string;
+  comment: string;
+  /** URL of the snapshot image for area annotations. */
+  imageUrl: string | null;
+  source: "user" | "ai";
+  tags: string[];
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface NewAnnotation {
+  type: AnnotationType;
+  color?: string;
+  page?: number | null;
+  rects?: NormRect[];
+  quote?: string;
+  prefix?: string;
+  suffix?: string;
+  comment?: string;
+  tags?: string[];
+  /** data:image/png;base64,... for area snapshots */
+  image?: string;
+}
+
+export interface Tag {
+  id: string;
+  name: string;
+  count: number;
+}
+
+/** One of the highlighter colours and what it means to the reader. */
+export interface ColorDef {
+  key: string;
+  hex: string;
+  label: string;
+}
+
+export const DEFAULT_COLORS: ColorDef[] = [
+  { key: "yellow", hex: "#facc15", label: "重點" },
+  { key: "red", hex: "#f87171", label: "疑問" },
+  { key: "green", hex: "#4ade80", label: "定義" },
+  { key: "blue", hex: "#60a5fa", label: "例子" },
+];

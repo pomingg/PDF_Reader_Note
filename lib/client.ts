@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect } from "react";
-import type { DocumentItem, DocumentQuery, Folder, Project } from "./types";
+import type { Annotation, ColorDef, DocumentItem, DocumentQuery, Folder, NewAnnotation, Project, Tag } from "./types";
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
   const res = await fetch(url, init);
@@ -52,6 +52,16 @@ export const api = {
     p: { title?: string; projectId?: string; folderId?: string | null; pageCount?: number; lastPage?: number; opened?: boolean },
   ) => send<DocumentItem>("PATCH", `/api/documents/${id}`, p),
   deleteDocument: (id: string) => send("DELETE", `/api/documents/${id}`),
+  annotations: (documentId: string) => request<Annotation[]>(`/api/documents/${documentId}/annotations`),
+  createAnnotation: (documentId: string, a: NewAnnotation) =>
+    send<Annotation>("POST", `/api/documents/${documentId}/annotations`, a),
+  updateAnnotation: (id: string, p: { color?: string; comment?: string; tags?: string[]; page?: number | null }) =>
+    send<Annotation>("PATCH", `/api/annotations/${id}`, p),
+  deleteAnnotation: (id: string) => send("DELETE", `/api/annotations/${id}`),
+  tags: () => request<Tag[]>("/api/tags"),
+  colors: () => request<ColorDef[]>("/api/settings/colors"),
+  saveColors: (c: ColorDef[]) => send<ColorDef[]>("PUT", "/api/settings/colors", c),
+
   upload: (files: File[], target: { projectId?: string; folderId?: string }) => {
     const form = new FormData();
     files.forEach((f) => form.append("files", f));

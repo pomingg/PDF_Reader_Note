@@ -40,7 +40,9 @@ export default function HomePage() {
             </div>
             <p className="mt-1 line-clamp-2 min-h-10 text-sm text-slate-500">{p.description || " "}</p>
             <div className="mt-3 flex justify-between text-xs text-slate-400">
-              <span>{p.documentCount} 份文件</span>
+              <span>
+                {p.documentCount} 份文件{p.annotationCount ? `・${p.annotationCount} 則筆記` : ""}
+              </span>
               <span>{p.lastOpenedAt ? `最近閱讀：${formatTime(p.lastOpenedAt)}` : ""}</span>
             </div>
           </Link>
