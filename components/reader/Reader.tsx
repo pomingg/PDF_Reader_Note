@@ -10,6 +10,7 @@ import {
   type DocumentItem,
   type Folder,
   type NewAnnotation,
+  type LayoutMode,
   type NormRect,
   type Project,
 } from "@/lib/types";
@@ -20,14 +21,26 @@ import { pageBox, PageView, snapToDevice, type PageHighlight, type PageSize } fr
 import { readSelection, type TextSelection } from "./selection";
 import { SelectionToolbar } from "./SelectionToolbar";
 import { openPdf, type PDFDocumentProxy } from "./pdfjs";
-import { findHits, getAllPageText, OutlinePanel, SearchPanel, ThumbnailPanel, type SearchHit } from "./SidePanels";
+import {
+  BookmarkPanel,
+  findHits,
+  getAllPageText,
+  OutlinePanel,
+  SearchPanel,
+  SHORTCUTS,
+  ThumbnailPanel,
+  type SearchHit,
+} from "./SidePanels";
+import { Dialog } from "@/components/Dialog";
+import type { Bookmark } from "@/lib/types";
 
 const GAP = 16;
 const PAD = 24;
 const MIN_SCALE = 0.25;
 const MAX_SCALE = 5;
-type Tab = "outline" | "thumbs" | "search";
-type ZoomMode = "fit" | "manual";
+type Tab = "outline" | "thumbs" | "search" | "bookmarks";
+type ZoomMode = "fit" | "page" | "manual";
+const SPREAD_GAP = 12;
 const NO_HIGHLIGHTS: PageHighlight[] = [];
 
 /** Document notes first, then by page and position on the page. */
@@ -56,6 +69,14 @@ export function Reader({ docId }: { docId: string }) {
 
   const [scale, setScale] = useState(1);
   const [zoomMode, setZoomMode] = useState<ZoomMode>("fit");
+  const [layout, setLayout] = useState<LayoutMode>("continuous");
+  /** The page shown in single-page layout. */
+  const [singlePage, setSinglePage] = useState(1);
+  const [bookmarks, setBookmarks] = useState<Bookmark[]>([]);
+  const [night, setNight] = useState(false);
+  const [helpOpen, setHelpOpen] = useState(false);
+  const [fullscreen, setFullscreen] = useState(false);
+  const rootRef = useRef<HTMLDivElement>(null);
   const [currentPage, setCurrentPage] = useState(1);
   const [visible, setVisible] = useState<Set<number>>(new Set([1]));
   const [panelOpen, setPanelOpen] = useState(true);
@@ -153,33 +174,51 @@ export function Reader({ docId }: { docId: string }) {
   /** Page sizes on screen, snapped to device pixels so pages render sharply. */
   const boxes = useMemo(() => sizes.map((s) => pageBox(s, scale, dpr)), [sizes, scale, dpr]);
 
-  const offsets = useMemo(() => {
-    const out: number[] = [];
+  /**
+   * Where each page sits inside the scroll area. Continuous: one column.
+   * Spread: two pages side by side per row. Single: only the current page, at the top.
+   */
+  const layoutInfo = useMemo(() => {
+    const rows: number[][] = [];
+    if (layout === "spread") for (let i = 0; i < boxes.length; i += 2) rows.push(i + 1 < boxes.length ? [i, i + 1] : [i]);
+    else for (let i = 0; i < boxes.length; i++) rows.push([i]);
+    const rowWidth = (r: number[]) => r.reduce((w, i) => w + boxes[i].w, 0) + (r.length - 1) * SPREAD_GAP;
+    const width = Math.max(view.width, Math.max(0, ...rows.map(rowWidth)) + PAD * 2);
+    const slots: { x: number; y: number }[] = new Array(boxes.length);
     let y = PAD;
-    for (const b of boxes) {
-      out.push(y);
-      y += b.h + GAP;
+    for (const r of rows) {
+      let x = Math.max(PAD, (width - rowWidth(r)) / 2);
+      for (const i of r) {
+        slots[i] = { x: snapToDevice(view.originX + x, dpr) - view.originX, y: layout === "single" ? PAD : y };
+        x += boxes[i].w + SPREAD_GAP;
+      }
+      if (layout !== "single") y += Math.max(...r.map((i) => boxes[i].h)) + GAP;
     }
-    return out;
-  }, [boxes]);
-
-  const contentWidth = useMemo(
-    () => Math.max(view.width, Math.max(0, ...boxes.map((b) => b.w)) + PAD * 2),
-    [boxes, view.width],
-  );
-  const pageLeft = useCallback(
-    (w: number) => snapToDevice(view.originX + Math.max(PAD, (contentWidth - w) / 2), dpr) - view.originX,
-    [contentWidth, dpr, view.originX],
-  );
+    const height = layout === "single" ? (boxes[singlePage - 1]?.h ?? 0) + PAD * 2 : y - GAP + PAD;
+    return { slots, width, height };
+  }, [boxes, layout, view.width, view.originX, dpr, singlePage]);
+  const offsets = useMemo(() => layoutInfo.slots.map((s) => s?.y ?? 0), [layoutInfo]);
 
   const maxWidth = useMemo(() => Math.max(1, ...sizes.map((s) => s.width)), [sizes]);
-  const fitScale = useCallback(() => {
-    const w = scroller.current?.clientWidth ?? 800;
-    return Math.min(MAX_SCALE, Math.max(MIN_SCALE, (w - PAD * 2) / maxWidth));
-  }, [maxWidth]);
+  const maxHeight = useMemo(() => Math.max(1, ...sizes.map((s) => s.height)), [sizes]);
+  /** Scale that makes pages fit the window width ("fit") or the whole page ("page"). */
+  const fitScale = useCallback(
+    (mode: ZoomMode = "fit", lay: LayoutMode = layout) => {
+      const el = scroller.current;
+      const w = el?.clientWidth ?? 800;
+      const h = el?.clientHeight ?? 600;
+      const perRow = lay === "spread" ? 2 : 1;
+      const byWidth = (w - PAD * 2 - (perRow - 1) * SPREAD_GAP) / (maxWidth * perRow);
+      const byHeight = (h - PAD * 2) / maxHeight;
+      const s = mode === "page" ? Math.min(byWidth, byHeight) : byWidth;
+      return Math.min(MAX_SCALE, Math.max(MIN_SCALE, Math.floor(s * 100) / 100));
+    },
+    [maxWidth, maxHeight, layout],
+  );
 
   const pageAt = useCallback(
     (y: number) => {
+      if (layout === "single") return singlePage;
       let lo = 0;
       let hi = offsets.length - 1;
       while (lo < hi) {
@@ -187,32 +226,50 @@ export function Reader({ docId }: { docId: string }) {
         if (offsets[mid] <= y) lo = mid;
         else hi = mid - 1;
       }
+      while (lo > 0 && offsets[lo - 1] === offsets[lo]) lo--; // left page of a spread
       return lo + 1;
     },
-    [offsets],
+    [offsets, layout, singlePage],
   );
 
   const updateVisible = useCallback(() => {
     const el = scroller.current;
     if (!el || !offsets.length) return;
+    if (layout === "single") {
+      setVisible((prev) => (prev.size === 1 && prev.has(singlePage) ? prev : new Set([singlePage])));
+      setCurrentPage(singlePage);
+      return;
+    }
     const top = el.scrollTop;
     const first = pageAt(top - el.clientHeight);
-    const last = pageAt(top + el.clientHeight * 2);
+    let last = pageAt(top + el.clientHeight * 2);
+    if (layout === "spread") last = Math.min(offsets.length, last + 1);
     setVisible((prev) => {
       const next = new Set<number>();
       for (let p = first; p <= last; p++) next.add(p);
       return next.size === prev.size && [...next].every((p) => prev.has(p)) ? prev : next;
     });
     setCurrentPage(pageAt(top + el.clientHeight * 0.35));
-  }, [offsets, pageAt]);
+  }, [offsets, pageAt, layout, singlePage]);
 
   const goToPage = useCallback(
     (page: number) => {
       const el = scroller.current;
-      const p = Math.min(Math.max(1, page), offsets.length);
+      const p = Math.min(Math.max(1, page), offsets.length || 1);
+      if (layout === "single") {
+        setSinglePage(p);
+        if (el) el.scrollTop = 0;
+        return;
+      }
       if (el && offsets.length) el.scrollTop = offsets[p - 1] - 8;
     },
-    [offsets],
+    [offsets, layout],
+  );
+
+  /** Previous / next screen: one page, or two in a spread. */
+  const step = useCallback(
+    (dir: 1 | -1) => goToPage(currentPage + dir * (layout === "spread" ? 2 : 1)),
+    [goToPage, currentPage, layout],
   );
 
   // Keep the reading position fixed while zooming: remember page + offset within it.
@@ -220,7 +277,7 @@ export function Reader({ docId }: { docId: string }) {
   const changeScale = useCallback(
     (next: number, mode: ZoomMode = "manual") => {
       const el = scroller.current;
-      if (el && offsets.length) {
+      if (el && offsets.length && layout !== "single") {
         const page = pageAt(el.scrollTop);
         const h = boxes[page - 1].h + GAP;
         anchor.current = { page, frac: (el.scrollTop - offsets[page - 1]) / h };
@@ -228,45 +285,76 @@ export function Reader({ docId }: { docId: string }) {
       setZoomMode(mode);
       setScale(Math.min(MAX_SCALE, Math.max(MIN_SCALE, Math.round(next * 100) / 100)));
     },
-    [offsets, pageAt, boxes],
+    [offsets, pageAt, boxes, layout],
+  );
+
+  const changeLayout = useCallback(
+    (next: LayoutMode) => {
+      if (next === layout) return;
+      const page = currentPage;
+      // Single / spread read best with the whole page visible.
+      const mode: ZoomMode = next === "continuous" ? (zoomMode === "page" ? "fit" : zoomMode) : zoomMode === "manual" ? "manual" : "page";
+      setLayout(next);
+      setSinglePage(page);
+      anchor.current = next === "single" ? null : { page, frac: 0 };
+      setZoomMode(mode);
+      if (mode !== "manual") setScale(fitScale(mode, next));
+    },
+    [layout, currentPage, zoomMode, fitScale],
   );
 
   useLayoutEffect(() => {
     const el = scroller.current;
     const a = anchor.current;
-    if (el && a && offsets.length) {
+    if (el && a && offsets.length && layout !== "single") {
       el.scrollTop = offsets[a.page - 1] + a.frac * (boxes[a.page - 1].h + GAP);
       anchor.current = null;
     }
     updateVisible();
-  }, [offsets, scale, sizes, updateVisible]);
+  }, [offsets, scale, sizes, layout, updateVisible]);
 
-  // First layout: fit width, then jump to where the reader left off.
+  // First layout: restore this document's layout and zoom, then jump to where the reader left off.
   useLayoutEffect(() => {
     if (!pdf || !doc || !sizes.length || restored.current) return;
     restored.current = true;
     const page = Math.min(Math.max(1, doc.lastPage), sizes.length);
-    const next = fitScale();
-    if (Math.abs(next - scale) < 0.005) {
-      if (page > 1 && scroller.current) scroller.current.scrollTop = offsets[page - 1];
+    const saved = doc.viewState ?? {};
+    const lay: LayoutMode = saved.layout === "single" || saved.layout === "spread" ? saved.layout : "continuous";
+    const mode: ZoomMode = saved.zoomMode === "page" || saved.zoomMode === "manual" ? saved.zoomMode : "fit";
+    const next = mode === "manual" && saved.scale ? saved.scale : fitScale(mode, lay);
+    setLayout(lay);
+    setZoomMode(mode);
+    setSinglePage(page);
+    if (Math.abs(next - scale) < 0.005 && lay === layout) {
+      if (page > 1 && scroller.current && lay !== "single") scroller.current.scrollTop = offsets[page - 1];
       updateVisible();
     } else {
-      anchor.current = { page, frac: 0 };
+      anchor.current = lay === "single" ? null : { page, frac: 0 };
       setScale(next);
     }
-  }, [pdf, doc, sizes, fitScale, scale, offsets, updateVisible]);
+  }, [pdf, doc, sizes, fitScale, scale, offsets, updateVisible, layout]);
 
   // Re-fit when the window or side panel changes size.
   useEffect(() => {
     const el = scroller.current;
-    if (!el || zoomMode !== "fit" || !sizes.length) return;
+    if (!el || zoomMode === "manual" || !sizes.length) return;
     const ro = new ResizeObserver(() => {
-      const s = fitScale();
-      if (Math.abs(s - scale) > 0.01) changeScale(s, "fit");
+      const s = fitScale(zoomMode);
+      if (Math.abs(s - scale) > 0.01) changeScale(s, zoomMode);
     });
     ro.observe(el);
     return () => ro.disconnect();
   }, [zoomMode, fitScale, scale, changeScale, sizes.length]);
+
+  // Remember layout and zoom for this document.
+  useEffect(() => {
+    if (!restored.current || !doc) return;
+    const t = setTimeout(
+      () => api.updateDocument(docId, { viewState: { layout, zoomMode, scale } }).catch(() => {}),
+      800,
+    );
+    return () => clearTimeout(t);
+  }, [layout, zoomMode, scale, docId, doc]);
 
   /* --------------------------------------------------------------- progress */
 
@@ -439,11 +527,15 @@ export function Reader({ docId }: { docId: string }) {
       const el = scroller.current;
       const r = a.rects[0];
       if (el && r && offsets.length) {
-        el.scrollTop = offsets[r.page - 1] + r.y * boxes[r.page - 1].h - el.clientHeight * 0.3;
+        const target = () => (el.scrollTop = offsets[r.page - 1] + r.y * boxes[r.page - 1].h - el.clientHeight * 0.3);
+        if (layout === "single") {
+          goToPage(r.page);
+          requestAnimationFrame(() => requestAnimationFrame(target));
+        } else target();
         setFlash({ id: a.id, n: Date.now() });
       } else if (a.page) goToPage(a.page);
     },
-    [offsets, sizes, scale, goToPage],
+    [offsets, boxes, goToPage, layout],
   );
   useEffect(() => {
     if (!flash) return;
@@ -462,6 +554,46 @@ export function Reader({ docId }: { docId: string }) {
     };
     document.addEventListener("selectionchange", onChange);
     return () => document.removeEventListener("selectionchange", onChange);
+  }, []);
+
+  /* -------------------------------------------- bookmarks, night, fullscreen */
+
+  useEffect(() => {
+    api.bookmarks(docId).then(setBookmarks).catch(() => {});
+  }, [docId]);
+  const currentBookmark = bookmarks.find((b) => b.page === currentPage);
+  const toggleBookmark = useCallback(async () => {
+    if (currentBookmark) {
+      setBookmarks((prev) => prev.filter((b) => b.id !== currentBookmark.id));
+      await api.deleteBookmark(currentBookmark.id);
+    } else {
+      const b = await api.addBookmark(docId, currentPage);
+      setBookmarks((prev) => [...prev, b].sort((x, y) => x.page - y.page));
+    }
+  }, [currentBookmark, currentPage, docId]);
+
+  useEffect(() => {
+    try {
+      setNight(localStorage.getItem("pdfnotes:night") === "1");
+    } catch {
+      /* storage unavailable */
+    }
+    const onFs = () => setFullscreen(!!document.fullscreenElement);
+    document.addEventListener("fullscreenchange", onFs);
+    return () => document.removeEventListener("fullscreenchange", onFs);
+  }, []);
+  const toggleNight = () =>
+    setNight((n) => {
+      try {
+        localStorage.setItem("pdfnotes:night", n ? "0" : "1");
+      } catch {
+        /* storage unavailable */
+      }
+      return !n;
+    });
+  const toggleFullscreen = useCallback(() => {
+    if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
+    else rootRef.current?.requestFullscreen?.().catch(() => {});
   }, []);
 
   /* -------------------------------------------------------------- shortcuts */
@@ -485,6 +617,24 @@ export function Reader({ docId }: { docId: string }) {
         changeScale(fitScale(), "fit");
       } else if (mod || e.altKey || isTyping(e)) {
         return;
+      } else if (!textSel && (e.key === "ArrowRight" || e.key === "ArrowLeft")) {
+        e.preventDefault();
+        step(e.key === "ArrowRight" ? 1 : -1);
+      } else if (layout !== "continuous" && (e.key === "PageDown" || e.key === "PageUp")) {
+        e.preventDefault();
+        step(e.key === "PageDown" ? 1 : -1);
+      } else if (e.key === "Home" || e.key === "End") {
+        e.preventDefault();
+        goToPage(e.key === "Home" ? 1 : (pdf?.numPages ?? 1));
+      } else if (!textSel && e.key.toLowerCase() === "b" && pdf) {
+        e.preventDefault();
+        toggleBookmark();
+      } else if (!textSel && e.key.toLowerCase() === "f" && pdf) {
+        e.preventDefault();
+        toggleFullscreen();
+      } else if (e.key === "?") {
+        e.preventDefault();
+        setHelpOpen((o) => !o);
       } else if (textSel && /^[1-4]$/.test(e.key) && colors[Number(e.key) - 1]) {
         e.preventDefault();
         highlightSelection(colors[Number(e.key) - 1].key);
@@ -501,7 +651,7 @@ export function Reader({ docId }: { docId: string }) {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [scale, changeScale, fitScale, textSel, colors, highlightSelection, pdf]);
+  }, [scale, changeScale, fitScale, textSel, colors, highlightSelection, pdf, step, layout, goToPage, toggleBookmark, toggleFullscreen]);
 
   /* ----------------------------------------------------------------- render */
 
@@ -510,7 +660,7 @@ export function Reader({ docId }: { docId: string }) {
   const numPages = pdf?.numPages ?? 0;
 
   return (
-    <div className="flex h-screen flex-col bg-slate-100">
+    <div ref={rootRef} className={`flex h-screen flex-col bg-slate-100 ${night ? "night" : ""}`} data-testid="reader-root">
       {/* toolbar */}
       <header className="flex h-12 shrink-0 items-center gap-2 border-b border-slate-200 bg-white px-3">
         <Link href={backHref} className="icon-btn" title="回到資料夾" aria-label="回到資料夾">
@@ -554,6 +704,12 @@ export function Reader({ docId }: { docId: string }) {
           <span className="text-slate-500" data-testid="page-count">
             / {numPages || "–"}
           </span>
+          <button type="button" className="icon-btn h-7 w-7" aria-label="上一頁" onClick={() => step(-1)}>
+            ‹
+          </button>
+          <button type="button" className="icon-btn h-7 w-7" aria-label="下一頁" onClick={() => step(1)}>
+            ›
+          </button>
         </form>
 
         <div className="ml-2 flex items-center gap-1 text-sm">
@@ -568,11 +724,39 @@ export function Reader({ docId }: { docId: string }) {
           </button>
           <button
             className={`btn ml-1 px-2 py-1 text-xs ${zoomMode === "fit" ? "border-indigo-300 text-indigo-700" : ""}`}
-            onClick={() => changeScale(fitScale(), "fit")}
+            onClick={() => changeScale(fitScale("fit"), "fit")}
           >
             符合寬度
           </button>
+          <button
+            className={`btn px-2 py-1 text-xs ${zoomMode === "page" ? "border-indigo-300 text-indigo-700" : ""}`}
+            onClick={() => changeScale(fitScale("page"), "page")}
+          >
+            符合頁面
+          </button>
         </div>
+        <Menu
+          trigger={layout === "single" ? "▯ 單頁" : layout === "spread" ? "▯▯ 雙頁" : "☰ 連續"}
+          triggerClassName="btn px-2 py-1 text-xs"
+          label="顯示方式"
+          items={[
+            { label: `${layout === "continuous" ? "✓ " : "　"}連續捲動`, onClick: () => changeLayout("continuous") },
+            { label: `${layout === "single" ? "✓ " : "　"}單頁`, onClick: () => changeLayout("single") },
+            { label: `${layout === "spread" ? "✓ " : "　"}雙頁並排`, onClick: () => changeLayout("spread") },
+            { label: `${night ? "✓ " : "　"}夜間閱讀`, onClick: toggleNight },
+            { label: fullscreen ? "　離開全螢幕（F）" : "　全螢幕（F）", onClick: toggleFullscreen },
+            { label: "　快捷鍵說明（?）", onClick: () => setHelpOpen(true) },
+          ]}
+        />
+        <button
+          className={`icon-btn ${currentBookmark ? "text-amber-500" : ""}`}
+          title={currentBookmark ? "移除這頁的書籤（B）" : "把這頁加入書籤（B）"}
+          aria-label={currentBookmark ? "移除書籤" : "加入書籤"}
+          aria-pressed={!!currentBookmark}
+          onClick={toggleBookmark}
+        >
+          {currentBookmark ? "🔖" : "🏷"}
+        </button>
         <button
           className="icon-btn"
           title="搜尋 (Ctrl+F)"
@@ -637,6 +821,7 @@ export function Reader({ docId }: { docId: string }) {
                   ["outline", "目錄"],
                   ["thumbs", "縮圖"],
                   ["search", "搜尋"],
+                  ["bookmarks", `書籤${bookmarks.length ? ` ${bookmarks.length}` : ""}`],
                 ] as [Tab, string][]
               ).map(([t, label]) => (
                 <button
@@ -656,6 +841,22 @@ export function Reader({ docId }: { docId: string }) {
                   aspect={sizes[0] ? sizes[0].width / sizes[0].height : 0.75}
                   currentPage={currentPage}
                   onGo={goToPage}
+                />
+              )}
+              {tab === "bookmarks" && (
+                <BookmarkPanel
+                  bookmarks={bookmarks}
+                  currentPage={currentPage}
+                  onGo={goToPage}
+                  onAdd={toggleBookmark}
+                  onRename={(id, title) => {
+                    setBookmarks((prev) => prev.map((b) => (b.id === id ? { ...b, title } : b)));
+                    api.renameBookmark(id, title);
+                  }}
+                  onDelete={(id) => {
+                    setBookmarks((prev) => prev.filter((b) => b.id !== id));
+                    api.deleteBookmark(id);
+                  }}
                 />
               )}
               {tab === "search" && (
@@ -687,8 +888,9 @@ export function Reader({ docId }: { docId: string }) {
           {error && <div className="m-8 rounded-lg bg-red-50 p-4 text-red-700">{error}</div>}
           {!pdf && !error && <div className="p-8 text-center text-slate-500">PDF 載入中…</div>}
           {pdf && (
-            <div style={{ paddingTop: PAD, paddingBottom: PAD, width: contentWidth }}>
-              {sizes.map((s, i) => (
+            <div className="relative" style={{ width: layoutInfo.width, height: layoutInfo.height }} data-layout={layout}>
+              {sizes.map((s, i) =>
+                layout === "single" && i + 1 !== singlePage ? null : (
                 <PageView
                   key={i}
                   pdf={pdf}
@@ -696,7 +898,8 @@ export function Reader({ docId }: { docId: string }) {
                   size={s}
                   scale={scale}
                   dpr={dpr}
-                  left={pageLeft(boxes[i]?.w ?? 0)}
+                  left={layoutInfo.slots[i]?.x ?? 0}
+                  top={layoutInfo.slots[i]?.y ?? 0}
                   active={visible.has(i + 1)}
                   query={query}
                   currentHit={currentHit?.page === i + 1 ? currentHit.index : -1}
@@ -707,7 +910,8 @@ export function Reader({ docId }: { docId: string }) {
                   onArea={onArea}
                   onPick={onPick}
                 />
-              ))}
+                ),
+              )}
             </div>
           )}
         </div>
@@ -735,6 +939,20 @@ export function Reader({ docId }: { docId: string }) {
         )}
       </div>
 
+      {helpOpen && (
+        <Dialog title="快捷鍵" onClose={() => setHelpOpen(false)}>
+          <table className="w-full text-sm" data-testid="shortcut-help">
+            <tbody>
+              {SHORTCUTS.map(([k, v]) => (
+                <tr key={k} className="border-b border-slate-100">
+                  <td className="whitespace-nowrap py-1 pr-4 font-mono text-xs text-slate-600">{k}</td>
+                  <td className="py-1 text-slate-700">{v}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </Dialog>
+      )}
       {textSel && !areaMode && (
         <SelectionToolbar
           anchor={textSel.anchor}

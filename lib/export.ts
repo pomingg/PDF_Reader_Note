@@ -3,6 +3,7 @@ import path from "node:path";
 import { strToU8, unzipSync, zipSync, type Zippable } from "fflate";
 import { DATA_DIR, db, PDF_DIR, SNAPSHOT_DIR, UNFILED_PROJECT_ID } from "./db";
 import { descendantFolderIds, getDocument, getFolder, getProject, HttpError, listFolders, listProjects } from "./library";
+import { listBookmarks } from "./bookmarks";
 import { getColors, listAnnotations } from "./notes";
 import type { Annotation, ColorDef, DocumentItem, Folder, Project } from "./types";
 
@@ -90,6 +91,11 @@ export function documentMarkdown(
     "",
   ];
 
+  const bookmarks = listBookmarks(doc.id);
+  if (bookmarks.length) {
+    out.push("## 書籤", "", ...bookmarks.map((b) => `- 第 ${b.page} 頁${b.title ? `：${b.title}` : ""}`), "");
+  }
+
   const docNotes = annotations.filter((a) => a.type === "note" && a.page == null);
   const anchored = annotations.filter((a) => !(a.type === "note" && a.page == null));
 
@@ -128,7 +134,7 @@ export function documentMarkdown(
     if (a.tags.length) out.push(a.tags.map(asTag).join(" "), "");
   }
 
-  if (!annotations.length) out.push("*（這份文件還沒有筆記）*", "");
+  if (!annotations.length && !bookmarks.length) out.push("*（這份文件還沒有筆記）*", "");
   return { markdown: out.join("\n").replace(/\n{3,}/g, "\n\n"), assets };
 }
 
@@ -252,7 +258,8 @@ const TABLES: Record<string, string[]> = {
   folders: ["id", "project_id", "parent_id", "name", "sort", "created_at"],
   documents: [
     "id", "project_id", "folder_id", "title", "filename", "size", "page_count", "last_page", "last_opened_at",
-    "created_at", "updated_at", "file_version", "annots_scanned_version",
+    "created_at", "updated_at", "file_version", "annots_scanned_version", "local_path", "file_mtime", "content_sig",
+    "missing", "view_state",
   ],
   annotations: [
     "id", "document_id", "type", "color", "page", "rects", "quote", "prefix", "suffix", "comment", "image",
@@ -261,7 +268,12 @@ const TABLES: Record<string, string[]> = {
   tags: ["id", "name", "created_at"],
   annotation_tags: ["annotation_id", "tag_id"],
   settings: ["key", "value"],
+  linked_folders: ["id", "path", "project_id", "folder_id", "scanned_at", "created_at"],
+  linked_ignores: ["path"],
+  bookmarks: ["id", "document_id", "page", "title", "created_at"],
 };
+/** Tables older backups may not have yet. */
+const OPTIONAL_TABLES = new Set(["linked_folders", "linked_ignores", "bookmarks"]);
 
 type Row = Record<string, unknown>;
 interface BackupJson {
@@ -282,6 +294,7 @@ function buildBackup(): Zippable {
   const json: BackupJson = { app: "pdf-reader-note", version: BACKUP_VERSION, exportedAt: new Date().toISOString(), tables };
   const files: Zippable = { "backup.json": strToU8(JSON.stringify(json, null, 1)) };
   for (const d of tables.documents) {
+    if (d.local_path || !d.filename) continue; // linked files stay where they are on this computer
     const f = path.join(PDF_DIR, String(d.filename));
     if (existsSync(f)) files[`pdfs/${d.filename}`] = [readFileSync(f), { level: 0 }];
   }
@@ -325,12 +338,16 @@ export function restoreBackup(zip: Uint8Array): RestoreResult {
   if (json?.app !== "pdf-reader-note" || typeof json.version !== "number") throw new HttpError(400, "不是本程式的備份檔");
   if (json.version > BACKUP_VERSION) throw new HttpError(400, "備份檔來自較新版本，請先更新程式");
   for (const t of Object.keys(TABLES)) {
-    if (!Array.isArray(json.tables?.[t])) throw new HttpError(400, `備份檔缺少資料表 ${t}`);
+    if (!Array.isArray(json.tables?.[t])) {
+      if (OPTIONAL_TABLES.has(t) && json.tables) json.tables[t] = [];
+      else throw new HttpError(400, `備份檔缺少資料表 ${t}`);
+    }
   }
 
   // Every referenced file must be present and have a safe name.
   const pdfs = new Map<string, Uint8Array>();
   for (const d of json.tables.documents) {
+    if (d.local_path) continue; // opened in place from this computer: the file is not in the backup
     const name = String(d.filename);
     if (!SAFE_FILE.test(name)) throw new HttpError(400, "備份檔中的 PDF 檔名不合法");
     const data = entries[`pdfs/${name}`];

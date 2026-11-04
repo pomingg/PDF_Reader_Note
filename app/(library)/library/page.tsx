@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { Suspense, useCallback, useEffect, useRef, useState } from "react";
 import { DocumentCard } from "@/components/DocumentCard";
+import { FolderPicker } from "@/components/FolderPicker";
 import { ConfirmDialog, MoveDialog, NameDialog } from "@/components/LibraryDialogs";
 import {
   api,
@@ -16,13 +17,15 @@ import {
   notifyLibraryChanged,
   useLibraryChanged,
 } from "@/lib/client";
-import type { DocumentItem, Folder, Project } from "@/lib/types";
+import type { DocumentItem, Folder, LinkedFolder, Project } from "@/lib/types";
 
 type DialogState =
   | { kind: "newFolder" }
   | { kind: "rename"; doc: DocumentItem }
   | { kind: "move"; doc: DocumentItem }
   | { kind: "delete"; doc: DocumentItem }
+  | { kind: "link" }
+  | { kind: "relocate"; doc: DocumentItem }
   | null;
 
 export default function LibraryPage() {
@@ -82,6 +85,21 @@ function Library() {
   }, [projectId, folderId, view, q, searching, scopeAll]);
   useEffect(load, [load]);
   useLibraryChanged(load);
+
+  // Pick up PDFs added / changed / moved in linked computer folders (server rate-limits this).
+  useEffect(() => {
+    api
+      .scanLinked()
+      .then((r) => {
+        if (r.added || r.updated || r.relinked || r.missing) notifyLibraryChanged();
+      })
+      .catch(() => {});
+  }, [projectId, folderId]);
+  const [linked, setLinked] = useState<LinkedFolder[]>([]);
+  useEffect(() => {
+    api.linkedFolders().then(setLinked);
+  }, [docs]);
+  const linkedHere = linked.filter((l) => l.projectId === projectId && (l.folderId ?? undefined) === folderId);
 
   const upload = async (files: File[]) => {
     const pdfs = files.filter((f) => f.type === "application/pdf" || /\.pdf$/i.test(f.name));
@@ -157,6 +175,15 @@ function Library() {
               ＋ 新增資料夾
             </button>
           )}
+          {projectId && (
+            <button
+              className="btn"
+              title="直接開啟電腦資料夾裡的 PDF，不複製檔案"
+              onClick={() => setDialog({ kind: "link" })}
+            >
+              📂 連結電腦資料夾
+            </button>
+          )}
           {(projectId || view === "all") && (
             <a
               className="btn"
@@ -201,6 +228,25 @@ function Library() {
           />
         </div>
         {project?.description && !folderId && <p className="mt-1 text-sm text-slate-500">{project.description}</p>}
+        {linkedHere.length > 0 && (
+          <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-slate-500" data-testid="linked-here">
+            {linkedHere.map((l) => (
+              <span key={l.id} className="rounded-full bg-sky-50 px-2 py-0.5 text-sky-700" title="這裡連結了電腦上的資料夾">
+                🔗 {l.path}
+              </span>
+            ))}
+            <button
+              className="underline hover:text-indigo-600"
+              onClick={async () => {
+                const r = await api.scanLinked(true);
+                setMessage(`重新整理完成：新增 ${r.added}、更新 ${r.updated}、找回 ${r.relinked}、找不到 ${r.missing} 份`);
+                notifyLibraryChanged();
+              }}
+            >
+              重新整理
+            </button>
+          </div>
+        )}
         {!projectId && view === "all" && (
           <p className="mt-1 text-sm text-slate-500">在這裡上傳的文件會放進「未分類」，之後可拖到左側專案。</p>
         )}
@@ -245,13 +291,17 @@ function Library() {
               menu={[
                 { label: "重新命名", onClick: () => setDialog({ kind: "rename", doc: d }) },
                 { label: "移動到…", onClick: () => setDialog({ kind: "move", doc: d }) },
-                {
-                  label: "更新 PDF 檔（保留筆記）",
-                  onClick: () => {
-                    replaceTarget.current = d;
-                    replaceInput.current?.click();
-                  },
-                },
+                ...(d.localPath
+                  ? [{ label: "重新指定檔案位置…", onClick: () => setDialog({ kind: "relocate", doc: d }) }]
+                  : [
+                      {
+                        label: "更新 PDF 檔（保留筆記）",
+                        onClick: () => {
+                          replaceTarget.current = d;
+                          replaceInput.current?.click();
+                        },
+                      },
+                    ]),
                 { label: "刪除", danger: true, onClick: () => setDialog({ kind: "delete", doc: d }) },
               ]}
             />
@@ -291,10 +341,37 @@ function Library() {
       {dialog?.kind === "move" && <MoveDialog doc={dialog.doc} onClose={() => setDialog(null)} />}
       {dialog?.kind === "delete" && (
         <ConfirmDialog
-          title="刪除文件"
-          message={`確定刪除「${dialog.doc.title}」？PDF 檔案會從資料夾中移除，無法復原。`}
+          title={dialog.doc.localPath ? "從閱讀筆記移除" : "刪除文件"}
+          message={
+            dialog.doc.localPath
+              ? `確定把「${dialog.doc.title}」從閱讀筆記移除？它的筆記會一併刪除；電腦裡的 PDF 檔不會被刪除，之後掃描也不會再加入。`
+              : `確定刪除「${dialog.doc.title}」？PDF 檔案會從資料夾中移除，無法復原。`
+          }
+          confirmLabel={dialog.doc.localPath ? "移除" : "刪除"}
           onClose={() => setDialog(null)}
           onConfirm={() => api.deleteDocument(dialog.doc.id)}
+        />
+      )}
+      {dialog?.kind === "link" && projectId && (
+        <FolderPicker
+          title="連結電腦資料夾"
+          confirmLabel="連結這個資料夾"
+          onClose={() => setDialog(null)}
+          onPick={async (path) => {
+            const { result } = await api.linkFolder({ path, projectId, folderId: folderId ?? null });
+            setMessage(`已連結，加入 ${result.added} 份 PDF。檔案會留在原本的位置，資料夾裡新增或修改的 PDF 會自動同步。`);
+            setDialog(null);
+            notifyLibraryChanged();
+          }}
+        />
+      )}
+      {dialog?.kind === "relocate" && (
+        <NameDialog
+          title="重新指定檔案位置"
+          label="PDF 檔的完整路徑（可在檔案總管按右鍵「複製路徑」後貼上）"
+          initial={dialog.doc.localPath ?? ""}
+          onClose={() => setDialog(null)}
+          onSubmit={(localPath) => api.updateDocument(dialog.doc.id, { localPath: localPath.replace(/^"|"$/g, "") })}
         />
       )}
     </div>

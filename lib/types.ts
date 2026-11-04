@@ -39,6 +39,44 @@ export interface DocumentItem {
   fileVersion: number;
   /** True until annotations embedded in the current PDF file have been imported. */
   needsAnnotationScan: boolean;
+  /** Path of the PDF on this computer when it is opened in place from a linked folder. */
+  localPath: string | null;
+  /** A linked file that can no longer be found. */
+  missing: boolean;
+  /** Remembered reader settings. */
+  viewState: ViewState | null;
+}
+
+export type LayoutMode = "continuous" | "single" | "spread";
+
+export interface ViewState {
+  layout?: LayoutMode;
+  zoomMode?: "fit" | "page" | "manual";
+  scale?: number;
+}
+
+export interface Bookmark {
+  id: string;
+  documentId: string;
+  page: number;
+  title: string;
+  createdAt: number;
+}
+
+export interface LinkedFolder {
+  id: string;
+  path: string;
+  projectId: string;
+  folderId: string | null;
+  scannedAt: number | null;
+  documentCount: number;
+}
+
+export interface ScanResult {
+  added: number;
+  updated: number;
+  relinked: number;
+  missing: number;
 }
 
 export interface DocumentQuery {

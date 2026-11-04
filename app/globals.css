@@ -4,13 +4,49 @@
 :root {
   color-scheme: light;
 }
+
+/*
+ * Dark theme: instead of adding dark: classes everywhere, remap the palette the
+ * app uses. White surfaces become dark slate and the slate scale is flipped, so
+ * every component follows. PDF pages themselves stay white (see .night for that).
+ */
+html.dark {
+  color-scheme: dark;
+  --color-white: #0f172a;
+  --color-slate-50: #0b1120;
+  --color-slate-100: #1e293b;
+  --color-slate-200: #334155;
+  --color-slate-300: #475569;
+  --color-slate-400: #7c8aa0;
+  --color-slate-500: #94a3b8;
+  --color-slate-600: #cbd5e1;
+  --color-slate-700: #e2e8f0;
+  --color-slate-800: #f1f5f9;
+  --color-slate-900: #f8fafc;
+  --color-indigo-50: #1e1b4b;
+  --color-indigo-100: #312e81;
+  --color-indigo-200: #3730a3;
+  --color-indigo-700: #a5b4fc;
+  --color-red-50: #450a0a;
+  --color-red-100: #7f1d1d;
+  --color-red-700: #fca5a5;
+  --color-emerald-100: #064e3b;
+  --color-emerald-700: #6ee7b7;
+  --color-amber-50: #2a1a05;
+  --color-amber-200: #78350f;
+  --color-sky-50: #0c2a3f;
+  --color-sky-100: #075985;
+  --color-sky-700: #7dd3fc;
+  --color-violet-100: #4c1d95;
+  --color-violet-700: #c4b5fd;
+}
 html,
 body {
   height: 100%;
 }
 body {
-  background: #f8fafc;
-  color: #0f172a;
+  background: var(--color-slate-50);
+  color: var(--color-slate-900);
   font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", "PingFang TC", "Noto Sans TC",
     "Microsoft JhengHei", sans-serif;
 }
@@ -18,7 +54,7 @@ body {
 /* pdf.js pages */
 .pdf-page {
   position: relative;
-  margin: 0 0 16px; /* left offset is set inline, snapped to device pixels */
+  margin: 0; /* position is set inline, snapped to device pixels */
   background: white;
   box-shadow: 0 1px 3px rgb(15 23 42 / 0.12), 0 1px 2px rgb(15 23 42 / 0.08);
 }
@@ -81,21 +117,21 @@ body {
   padding-left: 1.25em;
 }
 .markdown code {
-  background: #f1f5f9;
+  background: var(--color-slate-100);
   border-radius: 4px;
   padding: 0 4px;
   font-size: 0.9em;
 }
 .markdown pre {
-  background: #f1f5f9;
+  background: var(--color-slate-100);
   border-radius: 6px;
   padding: 8px;
   overflow-x: auto;
 }
 .markdown blockquote {
-  border-left: 3px solid #cbd5e1;
+  border-left: 3px solid var(--color-slate-300);
   padding-left: 0.75em;
-  color: #475569;
+  color: var(--color-slate-600);
 }
 .markdown a {
   color: #4f46e5;
@@ -106,7 +142,7 @@ body {
 }
 .markdown th,
 .markdown td {
-  border: 1px solid #e2e8f0;
+  border: 1px solid var(--color-slate-200);
   padding: 2px 6px;
 }
 .markdown .katex-display {
@@ -174,4 +210,18 @@ body {
 }
 .hl-imported.hl-flash {
   animation: hl-outline-flash 0.6s ease-in-out 2;
+}
+
+/* night reading: dark page, light text; highlights switch blend mode so they stay visible */
+.night .pdf-page {
+  background: #111827;
+}
+.night .pdf-page canvas,
+.night [data-testid="bookmark-panel"] canvas,
+.night .thumb-canvas {
+  filter: invert(0.9) hue-rotate(180deg);
+}
+.night .hl-rect {
+  mix-blend-mode: screen;
+  opacity: 0.35 !important;
 }

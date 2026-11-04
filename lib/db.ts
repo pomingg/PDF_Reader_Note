@@ -87,6 +87,30 @@ CREATE TABLE IF NOT EXISTS settings (
   key   TEXT PRIMARY KEY,
   value TEXT NOT NULL
 );
+
+-- Folders on this computer whose PDFs are opened in place (not copied).
+CREATE TABLE IF NOT EXISTS linked_folders (
+  id         TEXT PRIMARY KEY,
+  path       TEXT NOT NULL UNIQUE,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  folder_id  TEXT REFERENCES folders(id) ON DELETE SET NULL,
+  scanned_at INTEGER,
+  created_at INTEGER NOT NULL
+);
+
+-- Linked files the user removed from the library; scans skip them.
+CREATE TABLE IF NOT EXISTS linked_ignores (
+  path TEXT PRIMARY KEY
+);
+
+CREATE TABLE IF NOT EXISTS bookmarks (
+  id          TEXT PRIMARY KEY,
+  document_id TEXT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+  page        INTEGER NOT NULL,
+  title       TEXT NOT NULL DEFAULT '',
+  created_at  INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_bookmarks_document ON bookmarks(document_id);
 `;
 
 /** A prepared statement. Rows come back as plain objects; callers cast them. */
@@ -171,6 +195,15 @@ const ADDED_COLUMNS: [table: string, column: string, definition: string][] = [
   ["documents", "file_version", "INTEGER"],
   // file_version whose embedded annotations were already imported (NULL = never)
   ["documents", "annots_scanned_version", "INTEGER"],
+  // a PDF opened in place from a linked folder on this computer (NULL = uploaded copy in data/pdfs)
+  ["documents", "local_path", "TEXT"],
+  ["documents", "file_mtime", "INTEGER"],
+  // size + hash of the first 64 KB, to recognise a linked file after it was moved or renamed
+  ["documents", "content_sig", "TEXT"],
+  // 1 when a linked file can no longer be found
+  ["documents", "missing", "INTEGER"],
+  // reader settings remembered per document (zoom, layout) as JSON
+  ["documents", "view_state", "TEXT"],
 ];
 
 function migrate(db: Db) {

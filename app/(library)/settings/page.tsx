@@ -2,6 +2,7 @@
 
 import { useRef, useState } from "react";
 import { ConfirmDialog } from "@/components/LibraryDialogs";
+import { LinkedFoldersSection } from "@/components/LinkedFoldersSection";
 import { notifyLibraryChanged } from "@/lib/client";
 
 interface RestoreResult {
@@ -65,6 +66,8 @@ export default function SettingsPage() {
           ⬇ 下載完整備份
         </a>
       </section>
+
+      <LinkedFoldersSection />
 
       <section className="rounded-xl border border-amber-200 bg-amber-50 p-5">
         <h2 className="font-semibold">♻️ 從備份還原</h2>

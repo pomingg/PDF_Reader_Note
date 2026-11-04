@@ -36,7 +36,19 @@ export function DocumentCard({
         PDF
       </div>
       <div className="min-w-0 flex-1">
-        <div className="truncate font-medium text-slate-800">{doc.title}</div>
+        <div className="flex items-center gap-1.5">
+          <span className="truncate font-medium text-slate-800">{doc.title}</span>
+          {doc.localPath && !doc.missing && (
+            <span className="shrink-0 text-xs text-sky-600" title={`直接開啟電腦裡的檔案：${doc.localPath}`}>
+              🔗
+            </span>
+          )}
+          {doc.missing && (
+            <span className="shrink-0 rounded bg-red-100 px-1 text-xs text-red-700" title={doc.localPath ?? ""}>
+              找不到檔案
+            </span>
+          )}
+        </div>
         {location && <div className="truncate text-xs text-slate-500">{location}</div>}
         <div className="mt-1 flex items-center gap-3 text-xs text-slate-400">
           <span>{doc.pageCount ? `${doc.pageCount} 頁` : "—"}</span>
